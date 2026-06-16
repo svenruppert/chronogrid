@@ -137,6 +137,8 @@ public final class CalendarService implements HasLogger {
     this.readClients = List.copyOf(readClients);
     this.displayZone = displayZone;
     this.mapper = new EntryMapper(displayZone);
+    logger().info("CalendarService ready: primary={} readClients={} zone={}",
+        primary.collectionUri(), this.readClients.size(), displayZone);
   }
 
   // ── read side ──────────────────────────────────────────────────
@@ -156,16 +158,22 @@ public final class CalendarService implements HasLogger {
   private Stream<Entry> fanOut(
       java.util.function.Function<CalDavClient, List<RemoteEvent>> op) {
     Stream.Builder<Entry> all = Stream.builder();
+    int total = 0;
     for (int i = 0; i < readClients.size(); i++) {
       CalDavClient client = readClients.get(i);
       String color = PALETTE[Math.floorMod(client.collectionUri().hashCode(),
           PALETTE.length)];
+      int perClient = 0;
       for (RemoteEvent remote : op.apply(client)) {
         Entry entry = mapper.toEntry(remote);
         if (entry.getColor() == null) entry.setColor(color);
         all.accept(entry);
+        perClient++;
       }
+      total += perClient;
     }
+    logger().info("fanOut across {} client(s) produced {} entries total",
+        readClients.size(), total);
     return all.build();
   }
 
@@ -206,6 +214,10 @@ public final class CalendarService implements HasLogger {
     CalDavClient targetClient = pickClient(existingHref.orElse(targetCollection));
     URI target = existingHref.orElseGet(
         () -> targetClient.eventUri(uid));
+    boolean isUpdate = EntryMapper.readEtag(entry).isPresent();
+    logger().info("save entry uid={} kind={} mode={} target={}",
+        uid, EntryMapper.isTodo(entry) ? "VTODO" : "VEVENT",
+        isUpdate ? "update" : "new", target);
     String body = EntryMapper.isTodo(entry)
         ? mapper.toICalendarTodoText(entry)
         : mapper.toICalendarText(entry);
@@ -237,6 +249,8 @@ public final class CalendarService implements HasLogger {
     URI target = EntryMapper.readHref(entry)
         .orElseGet(() -> primary.eventUri(entry.getId()));
     String etag = EntryMapper.readEtag(entry).orElse(null);
+    logger().info("delete entry uid={} target={} etag={}",
+        entry.getId(), target, etag);
     pickClient(target).delete(target, etag);
   }
 

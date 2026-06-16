@@ -16,6 +16,7 @@
 
 package com.svenruppert.flow.views.calendar;
 
+import com.svenruppert.dependencies.core.logger.HasLogger;
 import com.svenruppert.flow.i18n.I18nSupport;
 import com.vaadin.flow.component.Composite;
 import com.vaadin.flow.component.button.Button;
@@ -64,7 +65,7 @@ import java.util.function.IntConsumer;
  * removed; the slider is the only N input now.
  */
 public final class CalendarNavigationBar
-    extends Composite<Div> implements I18nSupport {
+    extends Composite<Div> implements I18nSupport, HasLogger {
 
   public enum ViewMode { DAY, WEEK, N_DAYS, MONTH }
 
@@ -122,13 +123,7 @@ public final class CalendarNavigationBar
 
     Div navGroup = new Div(pagePrev, slidePrev, today, slideNext, pageNext);
     navGroup.setId("calendar-nav-group");
-    navGroup.getStyle()
-        .set("display", "inline-flex")
-        .set("align-items", "center")
-        .set("gap", "var(--lumo-space-xs)")
-        .set("padding", "var(--lumo-space-xs)")
-        .set("background", "var(--lumo-contrast-5pct)")
-        .set("border-radius", "var(--lumo-border-radius-l)");
+    navGroup.addClassName("calendar-nav__group");
 
     datePicker = new DatePicker(tr(K_DATE, "Go to date"));
     datePicker.setValue(initialDate);
@@ -140,7 +135,10 @@ public final class CalendarNavigationBar
     i18n.setToday("");
     datePicker.setI18n(i18n);
     datePicker.addValueChangeListener(e -> {
-      if (e.getValue() != null) onDateChanged.accept(e.getValue());
+      if (e.getValue() != null) {
+        logger().info("Nav: date jump -> {}", e.getValue());
+        onDateChanged.accept(e.getValue());
+      }
     });
 
     HorizontalLayout left = new HorizontalLayout(navGroup, datePicker);
@@ -150,19 +148,7 @@ public final class CalendarNavigationBar
     // ── center: interval label ───────────────────────────────────
     intervalLabel = new Div();
     intervalLabel.setText("");
-    intervalLabel.getStyle()
-        .set("font-size", "var(--lumo-font-size-xl)")
-        .set("font-weight", "600")
-        .set("letter-spacing", "-0.01em")
-        .set("color", "var(--lumo-header-text-color)")
-        .set("font-variant-numeric", "tabular-nums")
-        .set("padding", "0 var(--lumo-space-m)")
-        .set("flex", "1 1 0")
-        .set("min-width", "0")
-        .set("text-align", "center")
-        .set("white-space", "nowrap")
-        .set("overflow", "hidden")
-        .set("text-overflow", "ellipsis");
+    intervalLabel.addClassName("calendar-nav__interval");
 
     // ── right: view tabs + (N-days only) slider ──────────────────
     Tab dayTab = new Tab(tr(K_VIEW_DAY, "Day"));
@@ -180,20 +166,13 @@ public final class CalendarNavigationBar
 
     viewTabs = new Tabs(dayTab, weekTab, nTab, monthTab);
     viewTabs.setSelectedTab(tabsByMode.get(initialView));
-    viewTabs.getStyle()
-        .set("background", "var(--lumo-contrast-5pct)")
-        .set("border-radius", "var(--lumo-border-radius-l)")
-        .set("padding", "2px");
+    viewTabs.addClassName("calendar-nav__tabs");
 
     // Slider is the ONLY input for N now.
     int initial = clamp(initialNDays);
     nDaysValueLabel = new Span(tr(K_NDAYS_VALUE, "N = {0} days",
         String.valueOf(initial)));
-    nDaysValueLabel.getStyle()
-        .set("color", "var(--lumo-secondary-text-color)")
-        .set("font-size", "var(--lumo-font-size-s)")
-        .set("font-variant-numeric", "tabular-nums")
-        .set("min-width", "70px");
+    nDaysValueLabel.addClassName("calendar-nav__ndays-value");
 
     nDaysSlider = new Element("input");
     nDaysSlider.setAttribute("type", "range");
@@ -201,15 +180,12 @@ public final class CalendarNavigationBar
     nDaysSlider.setAttribute("max", String.valueOf(MAX_N_DAYS));
     nDaysSlider.setAttribute("step", "1");
     nDaysSlider.setProperty("value", String.valueOf(initial));
-    nDaysSlider.getStyle()
-        .set("width", "180px")
-        .set("accent-color", "var(--lumo-primary-color)")
-        .set("cursor", "pointer");
+    nDaysSlider.getClassList().add("calendar-nav__ndays-slider");
     nDaysSlider.addEventListener("input", ev -> {
       tools.jackson.databind.JsonNode node =
           ev.getEventData().get("event.target.value");
       if (node == null) return;
-      String v = node.asText();
+      String v = node.asString();
       if (!v.isBlank()) {
         int next = clamp(Integer.parseInt(v));
         nDaysValueLabel.setText(tr(K_NDAYS_VALUE, "N = {0} days",
@@ -219,10 +195,7 @@ public final class CalendarNavigationBar
     }).addEventData("event.target.value");
 
     Div sliderHost = new Div();
-    sliderHost.getStyle()
-        .set("display", "inline-flex")
-        .set("align-items", "center")
-        .set("padding-bottom", "var(--lumo-space-xs)");
+    sliderHost.addClassName("calendar-nav__slider-host");
     sliderHost.getElement().appendChild(nDaysSlider);
 
     nGroup = new HorizontalLayout(nDaysValueLabel, sliderHost);
@@ -233,6 +206,7 @@ public final class CalendarNavigationBar
     viewTabs.addSelectedChangeListener(e -> {
       ViewMode mode = modeFor(e.getSelectedTab());
       nGroup.setVisible(mode == ViewMode.N_DAYS);
+      logger().info("Nav: view mode -> {}", mode);
       onViewChanged.accept(mode);
     });
 
@@ -245,9 +219,7 @@ public final class CalendarNavigationBar
     bar.setWidthFull();
     bar.setAlignItems(FlexComponent.Alignment.END);
     bar.setSpacing(true);
-    bar.getStyle()
-        .set("gap", "var(--lumo-space-l)")
-        .set("flex-wrap", "wrap");
+    bar.addClassName("calendar-nav__bar");
     root.add(bar);
   }
 
@@ -273,10 +245,9 @@ public final class CalendarNavigationBar
   private static void styleRoot(Div root) {
     root.setWidthFull();
     // Subtle treatment so the bar reads as a section header inside
-    // CalendarView's frame, not a second nested card.
-    root.getStyle()
-        .set("padding", "var(--lumo-space-s) 0")
-        .set("border-bottom", "1px solid var(--lumo-contrast-10pct)");
+    // CalendarView's frame, not a second nested card — see
+    // `.calendar-nav` in styles/calendar-view.css.
+    root.addClassName("calendar-nav");
   }
 
   // ── public API ─────────────────────────────────────────────────

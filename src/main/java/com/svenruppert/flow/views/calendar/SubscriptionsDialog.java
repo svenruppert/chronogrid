@@ -16,6 +16,7 @@
 
 package com.svenruppert.flow.views.calendar;
 
+import com.svenruppert.dependencies.core.logger.HasLogger;
 import com.svenruppert.flow.calendar.service.CalDavServerConnection;
 import com.svenruppert.flow.calendar.service.CalendarSubscription;
 import com.svenruppert.flow.i18n.I18nSupport;
@@ -54,7 +55,7 @@ import java.util.function.Consumer;
  * triggers a calendar refresh.
  */
 public final class SubscriptionsDialog
-    extends Composite<Dialog> implements I18nSupport {
+    extends Composite<Dialog> implements I18nSupport, HasLogger {
 
   private static final String K_TITLE = "calendar.subscriptions.title";
   private static final String K_EMPTY = "calendar.subscriptions.empty";
@@ -90,12 +91,14 @@ public final class SubscriptionsDialog
     Dialog dialog = getContent();
     dialog.setHeaderTitle(tr(K_TITLE, "Subscribed calendars"));
     dialog.setWidth("720px");
+    logger().info("SubscriptionsDialog open: {} subscription(s), {} server(s)",
+        subscriptions.size(), servers.size());
 
     if (subscriptions.isEmpty()) {
       Span empty = new Span(tr(K_EMPTY,
           "You are not subscribed to any CalDAV calendar yet. "
               + "Use Settings → Discover calendars to add one."));
-      empty.getStyle().set("color", "var(--lumo-secondary-text-color)");
+      empty.addClassName("calendar-secondary-text");
       dialog.add(empty);
     } else {
       dialog.add(buildGrid(subscriptions, servers,
@@ -128,18 +131,14 @@ public final class SubscriptionsDialog
       picker.setAttribute("title", s.displayName());
       String initial = normaliseColor(s.color());
       picker.setProperty("value", initial);
-      picker.getStyle()
-          .set("width", "32px")
-          .set("height", "26px")
-          .set("padding", "0")
-          .set("border", "1px solid var(--lumo-contrast-20pct)")
-          .set("border-radius", "4px")
-          .set("cursor", "pointer")
-          .set("background", "transparent");
+      picker.getClassList().add("calendar-color-picker");
       picker.addEventListener("change", ev -> {
         var node = ev.getEventData().get("event.target.value");
         if (node != null) {
-          onColorChanged.accept(s.uri(), node.asString());
+          String picked = node.asString();
+          logger().info("SubscriptionsDialog colour change: {} -> {}",
+              s.uri(), picked);
+          onColorChanged.accept(s.uri(), picked);
         }
       }).addEventData("event.target.value");
       host.getElement().appendChild(picker);
@@ -161,14 +160,19 @@ public final class SubscriptionsDialog
     grid.addComponentColumn(s -> {
       Checkbox visible = new Checkbox(s.visible());
       visible.setId("sub-visible-" + s.uri().hashCode());
-      visible.addValueChangeListener(e ->
-          onToggleVisible.accept(s.uri(), e.getValue()));
+      visible.addValueChangeListener(e -> {
+        logger().info("SubscriptionsDialog visibility toggle: {} -> {}",
+            s.uri(), e.getValue());
+        onToggleVisible.accept(s.uri(), e.getValue());
+      });
       return visible;
     }).setHeader(tr(K_COL_VISIBLE, "Visible")).setAutoWidth(true).setFlexGrow(0);
 
     grid.addComponentColumn(s -> {
-      Button disconnect = new Button(VaadinIcon.CLOSE.create(),
-          e -> onRemove.accept(s.uri()));
+      Button disconnect = new Button(VaadinIcon.CLOSE.create(), e -> {
+        logger().info("SubscriptionsDialog disconnect: {}", s.uri());
+        onRemove.accept(s.uri());
+      });
       disconnect.setId("sub-disconnect-" + s.uri().hashCode());
       disconnect.getElement().setProperty("title",
           tr(K_ACTION_DISCONNECT, "Disconnect"));

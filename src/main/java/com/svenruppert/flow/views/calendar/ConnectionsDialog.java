@@ -16,6 +16,7 @@
 
 package com.svenruppert.flow.views.calendar;
 
+import com.svenruppert.dependencies.core.logger.HasLogger;
 import com.svenruppert.flow.calendar.client.CalDavClient;
 import com.svenruppert.flow.calendar.client.CalDavErrors;
 import com.svenruppert.flow.calendar.service.CalDavServerConnection;
@@ -46,7 +47,7 @@ import java.util.Map;
  * (tooltip shows the {@link CalDavErrors.Kind}).
  */
 public final class ConnectionsDialog
-    extends Composite<Dialog> implements I18nSupport {
+    extends Composite<Dialog> implements I18nSupport, HasLogger {
 
   private static final String K_TITLE = "calendar.connections.title";
   private static final String K_EMPTY = "calendar.connections.empty";
@@ -66,12 +67,14 @@ public final class ConnectionsDialog
     Dialog dialog = getContent();
     dialog.setHeaderTitle(tr(K_TITLE, "Server connections"));
     dialog.setWidth("780px");
+    logger().info("ConnectionsDialog open: {} server(s), {} subscription(s)",
+        servers.size(), subscriptions.size());
 
     if (servers.isEmpty()) {
       Span empty = new Span(tr(K_EMPTY,
           "No CalDAV servers configured yet. Use Settings → Discover "
               + "calendars to add one."));
-      empty.getStyle().set("color", "var(--lumo-secondary-text-color)");
+      empty.addClassName("calendar-secondary-text");
       dialog.add(empty);
     } else {
       dialog.add(buildGrid(servers, subscriptions));

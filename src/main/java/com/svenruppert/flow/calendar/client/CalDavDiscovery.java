@@ -87,10 +87,17 @@ public final class CalDavDiscovery implements HasLogger {
     if (startUri == null) {
       throw new IllegalArgumentException("startUri must not be null");
     }
+    logger().info("Discovery start uri={} user={}",
+        startUri, username == null ? "<anonymous>" : username);
     String authHeader = buildBasicAuthHeader(username, password);
     URI principal = findPrincipal(startUri, authHeader);
+    logger().info("Discovery step 1: principal={}", principal);
     URI calendarHome = findCalendarHome(principal, authHeader);
-    return findCalendars(calendarHome, authHeader);
+    logger().info("Discovery step 2: calendar-home={}", calendarHome);
+    List<DiscoveredCalendar> calendars = findCalendars(calendarHome, authHeader);
+    logger().info("Discovery step 3: found {} calendar(s) under {}",
+        calendars.size(), calendarHome);
+    return calendars;
   }
 
   // ── step 1 — current-user-principal ────────────────────────────
@@ -203,6 +210,7 @@ public final class CalDavDiscovery implements HasLogger {
     }
     int code = resp.statusCode();
     if (code != HttpStatus.MULTI_STATUS.code() && code != HttpStatus.OK.code()) {
+      logger().warn("PROPFIND {} (Depth: {}) -> HTTP {}", uri, depth, code);
       throw new IllegalStateException(
           "PROPFIND " + uri + " failed with HTTP " + code);
     }

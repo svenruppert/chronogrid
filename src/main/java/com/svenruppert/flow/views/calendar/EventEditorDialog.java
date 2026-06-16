@@ -16,6 +16,7 @@
 
 package com.svenruppert.flow.views.calendar;
 
+import com.svenruppert.dependencies.core.logger.HasLogger;
 import com.svenruppert.flow.calendar.mapping.EntryMapper;
 import com.svenruppert.flow.calendar.service.CalDavServerConnection;
 import com.svenruppert.flow.calendar.service.CalendarSubscription;
@@ -58,7 +59,7 @@ import java.util.function.Consumer;
  * label.
  */
 public final class EventEditorDialog
-    extends Composite<Dialog> implements I18nSupport {
+    extends Composite<Dialog> implements I18nSupport, HasLogger {
 
   private static final String ALL_SERVERS_SENTINEL = "__all__";
 
@@ -108,6 +109,9 @@ public final class EventEditorDialog
     dialog.setHeaderTitle(isNew
         ? tr(K_DIALOG_TITLE_NEW, "New event")
         : tr(K_DIALOG_TITLE_EDIT, "Edit event"));
+    logger().info("EventEditorDialog open: mode={} uid={} subscriptions={} servers={}",
+        isNew ? "new" : "edit", entry.getId(),
+        subscriptions.size(), servers.size());
 
     Map<String, String> serverNameById = new HashMap<>();
     for (CalDavServerConnection s : servers) {
@@ -173,6 +177,8 @@ public final class EventEditorDialog
       URI target = calendarSelectFinal != null && calendarSelectFinal.getValue() != null
           ? calendarSelectFinal.getValue().uri()
           : null;
+      logger().info("EventEditorDialog Save: uid={} title=\"{}\" target={}",
+          entry.getId(), entry.getTitle(), target);
       onSave.accept(entry, target);
       dialog.close();
     });
@@ -182,8 +188,11 @@ public final class EventEditorDialog
     actions.setAlignItems(FlexComponent.Alignment.CENTER);
 
     if (!isNew) {
-      Button delete = new Button(tr(K_ACTION_DELETE, "Delete"),
-          e -> onDeleteRequest.accept(entry, dialog::close));
+      Button delete = new Button(tr(K_ACTION_DELETE, "Delete"), e -> {
+        logger().info("EventEditorDialog Delete requested: uid={} title=\"{}\"",
+            entry.getId(), entry.getTitle());
+        onDeleteRequest.accept(entry, dialog::close);
+      });
       delete.addThemeVariants(ButtonVariant.LUMO_ERROR, ButtonVariant.LUMO_TERTIARY);
       actions.add(delete);
     }
@@ -220,14 +229,12 @@ public final class EventEditorDialog
   private Component renderCalendarItem(CalendarSubscription sub,
                                        Map<String, String> serverNameById) {
     Div swatch = new Div();
-    swatch.setWidth("14px");
-    swatch.setHeight("14px");
-    swatch.getStyle()
-        .set("background", sub.color() == null
-            ? "var(--lumo-contrast-30pct)" : sub.color())
-        .set("border-radius", "3px")
-        .set("border", "1px solid var(--lumo-contrast-20pct)")
-        .set("flex-shrink", "0");
+    swatch.addClassName("calendar-swatch");
+    if (sub.color() != null) {
+      // Data-driven per-row colour; static rules live in
+      // styles/calendar-view.css → .calendar-swatch.
+      swatch.getStyle().set("--swatch-color", sub.color());
+    }
 
     Span name = new Span(sub.displayName());
 
@@ -239,9 +246,7 @@ public final class EventEditorDialog
         ? "" : serverNameById.getOrDefault(sub.serverId(), "");
     if (!serverName.isEmpty()) {
       Span server = new Span("· " + serverName);
-      server.getStyle()
-          .set("color", "var(--lumo-secondary-text-color)")
-          .set("font-size", "var(--lumo-font-size-s)");
+      server.addClassName("calendar-secondary-text");
       row.add(server);
     }
     return row;

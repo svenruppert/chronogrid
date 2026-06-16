@@ -55,9 +55,12 @@ import com.vaadin.flow.router.Route;
 import com.vaadin.flow.server.VaadinSession;
 import com.vaadin.flow.shared.Registration;
 import org.vaadin.stefan.fullcalendar.CalendarViewImpl;
+import org.vaadin.stefan.fullcalendar.CustomCalendarView;
 import org.vaadin.stefan.fullcalendar.Entry;
 import org.vaadin.stefan.fullcalendar.FullCalendar;
 import org.vaadin.stefan.fullcalendar.dataprovider.EntryProvider;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -180,7 +183,7 @@ public class CalendarView extends Composite<VerticalLayout>
       new ConnectionStatusBadge(this::onReconnect);
   private transient Registration pollRegistration;
   private CalendarNavigationBar navigationBar;
-  private transient org.vaadin.stefan.fullcalendar.CustomCalendarView[] nDaysCustomViews;
+  private transient CustomCalendarView[] nDaysCustomViews;
 
   public CalendarView() {
     this(resolveInitialService());
@@ -193,30 +196,15 @@ public class CalendarView extends Composite<VerticalLayout>
     root.setSizeFull();
     root.setPadding(false);
     root.setSpacing(false);
-    root.getStyle()
-        .set("padding", "var(--lumo-space-m)")
-        .set("min-width", "0")
-        .set("overflow", "hidden")
-        .set("box-sizing", "border-box")
-        .set("background", "var(--lumo-contrast-5pct)");
+    root.addClassName("calendar-view");
 
     // Visual frame around the whole calendar view — gives a clear
-    // card-like boundary against the surrounding MainLayout.
+    // card-like boundary against the surrounding MainLayout. All
+    // visual rules live in styles/calendar-view.css.
     com.vaadin.flow.component.html.Div frame =
         new com.vaadin.flow.component.html.Div();
     frame.setSizeFull();
-    frame.getStyle()
-        .set("display", "flex")
-        .set("flex-direction", "column")
-        .set("gap", "var(--lumo-space-l)")
-        .set("padding", "var(--lumo-space-l)")
-        .set("background", "var(--lumo-base-color)")
-        .set("border", "1px solid var(--lumo-contrast-10pct)")
-        .set("border-radius", "var(--lumo-border-radius-l)")
-        .set("box-shadow", "var(--lumo-box-shadow-s)")
-        .set("box-sizing", "border-box")
-        .set("overflow", "hidden")
-        .set("min-width", "0");
+    frame.addClassName("calendar-view__frame");
     root.add(frame);
     root.expand(frame);
 
@@ -225,10 +213,10 @@ public class CalendarView extends Composite<VerticalLayout>
 
     EntryProvider<Entry> provider = EntryProvider.fromCallbacks(
         query -> rangeWithStatus(query.getStart(), query.getEnd()),
-        id -> lookupWithStatus(id));
+        this::lookupWithStatus);
 
-    org.vaadin.stefan.fullcalendar.CustomCalendarView[] customViews =
-        new org.vaadin.stefan.fullcalendar.CustomCalendarView[
+    CustomCalendarView[] customViews =
+        new CustomCalendarView[
             CalendarNavigationBar.MAX_N_DAYS];
     for (int i = 0; i < CalendarNavigationBar.MAX_N_DAYS; i++) {
       customViews[i] = buildNDaysView(i + 1);
@@ -240,25 +228,25 @@ public class CalendarView extends Composite<VerticalLayout>
     // default left/center/right groups (prev/next/today and the
     // view-switcher buttons). Our CalendarNavigationBar replaces
     // all of it.
-    tools.jackson.databind.node.ObjectNode initialOptions =
-        tools.jackson.databind.json.JsonMapper.builder().build().createObjectNode();
+    ObjectNode initialOptions =
+        JsonMapper.builder().build().createObjectNode();
     initialOptions.put("headerToolbar", false);
 
     // Direct construction — the FullCalendarBuilder API is fully
     // @Deprecated(since="7.2.0") and its build() method only chains
-    // the same public setters we now call here.
+    // the same public setters we now call here. The dedicated
+    // boolean/Locale/height setters are also @Deprecated in 7.2 —
+    // setOption(Option, ...) / setHeight(String) is the current API.
     calendar = new FullCalendar(initialOptions);
     calendar.setCustomCalendarViews(customViews);
     calendar.setEntryProvider(provider);
-    calendar.setLocale(com.vaadin.flow.component.UI.getCurrent().getLocale());
+    calendar.setOption(FullCalendar.Option.LOCALE,
+        com.vaadin.flow.component.UI.getCurrent().getLocale());
     calendar.changeView(CalendarViewImpl.DAY_GRID_MONTH);
     calendar.setSizeFull();
-    calendar.setTimeslotsSelectable(true);
-    calendar.setHeightByParent();
-    calendar.getStyle()
-        .set("max-width", "100%")
-        .set("min-width", "0")
-        .set("overflow", "hidden");
+    calendar.setOption(FullCalendar.Option.SELECTABLE, true);
+    calendar.setHeight("100%");
+    calendar.addClassName("calendar-view__calendar");
 
     calendar.addTimeslotsSelectedListener(event -> {
       Entry draft = new Entry(UUID.randomUUID().toString());
@@ -290,10 +278,6 @@ public class CalendarView extends Composite<VerticalLayout>
         navigationBar.setIntervalLabel(formatVisibleInterval()));
 
     frame.add(calendar);
-    frame.getElement().getStyle().set("min-height", "0");
-    // Let the calendar take the remaining vertical space inside the
-    // frame's flex column.
-    calendar.getStyle().set("flex", "1 1 0");
     refreshBackendStatus();
     markUnknown();
 
@@ -324,7 +308,7 @@ public class CalendarView extends Composite<VerticalLayout>
 
   private HorizontalLayout buildToolbar() {
     Span backendLabel = new Span(tr(K_TB_BACKEND, "Servers:"));
-    backendLabel.getStyle().set("color", "var(--lumo-secondary-text-color)");
+    backendLabel.addClassName("calendar-secondary-text");
 
     HorizontalLayout status = new HorizontalLayout(
         backendLabel, serverStatusList, connectionBadge);
@@ -420,21 +404,21 @@ public class CalendarView extends Composite<VerticalLayout>
     }
   }
 
-  private static org.vaadin.stefan.fullcalendar.CustomCalendarView buildNDaysView(
+  private static CustomCalendarView buildNDaysView(
       int days) {
-    tools.jackson.databind.node.ObjectNode settings =
-        tools.jackson.databind.json.JsonMapper.builder().build().createObjectNode();
+    ObjectNode settings =
+        JsonMapper.builder().build().createObjectNode();
     settings.put("type", "timeGrid");
-    tools.jackson.databind.node.ObjectNode duration = settings.putObject("duration");
+    ObjectNode duration = settings.putObject("duration");
     duration.put("days", days);
     // Column header: short weekday + dd.mm so each rolling-window day is
     // identifiable at a glance ("Mo 14.06" / "Sa 21.06").
-    tools.jackson.databind.node.ObjectNode dayHeaderFormat =
+    ObjectNode dayHeaderFormat =
         settings.putObject("dayHeaderFormat");
     dayHeaderFormat.put("weekday", "short");
     dayHeaderFormat.put("day", "2-digit");
     dayHeaderFormat.put("month", "2-digit");
-    return new org.vaadin.stefan.fullcalendar.CustomCalendarView
+    return new CustomCalendarView
         .AnonymousCustomCalendarView("nDays" + days, settings);
   }
 
@@ -693,8 +677,7 @@ public class CalendarView extends Composite<VerticalLayout>
             + "Leave blank for the local caldav-testbench. Pick a provider "
             + "preset above for a one-click URL + provider-specific hint.");
     Span hint = new Span(defaultHint);
-    hint.getStyle().set("color", "var(--lumo-secondary-text-color)");
-    hint.getStyle().set("font-size", "var(--lumo-font-size-s)");
+    hint.addClassName("calendar-secondary-text");
 
     HorizontalLayout presets = buildPresetRow(uri, hint, defaultHint);
 
@@ -732,8 +715,7 @@ public class CalendarView extends Composite<VerticalLayout>
   private HorizontalLayout buildPresetRow(TextField uri, Span hint,
                                           String defaultHint) {
     Span label = new Span(tr(K_SET_PRESETS_LABEL, "Quick connect:"));
-    label.getStyle().set("color", "var(--lumo-secondary-text-color)");
-    label.getStyle().set("font-size", "var(--lumo-font-size-s)");
+    label.addClassName("calendar-secondary-text");
 
     HorizontalLayout row = new HorizontalLayout(label);
     row.setAlignItems(FlexComponent.Alignment.CENTER);

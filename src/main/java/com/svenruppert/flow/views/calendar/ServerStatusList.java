@@ -16,6 +16,7 @@
 
 package com.svenruppert.flow.views.calendar;
 
+import com.svenruppert.dependencies.core.logger.HasLogger;
 import com.svenruppert.flow.calendar.service.CalDavServerConnection;
 import com.vaadin.flow.component.Composite;
 import com.vaadin.flow.component.html.Span;
@@ -44,20 +45,20 @@ import java.util.Map;
  * Connections dialog.
  */
 public final class ServerStatusList
-    extends Composite<HorizontalLayout> {
+    extends Composite<HorizontalLayout> implements HasLogger {
 
   public enum State { UNKNOWN, CONNECTED, DISCONNECTED }
 
   private final Map<String, Span> dotByServerId = new HashMap<>();
+  private final Map<String, State> stateByServerId = new HashMap<>();
+  private final Map<String, String> nameByServerId = new HashMap<>();
 
   public ServerStatusList() {
     HorizontalLayout root = getContent();
     root.setAlignItems(FlexComponent.Alignment.CENTER);
     root.setSpacing(false);
     root.setPadding(false);
-    root.getStyle()
-        .set("gap", "var(--lumo-space-xs)")
-        .set("flex-wrap", "wrap");
+    root.addClassName("server-status-list");
   }
 
   /**
@@ -69,9 +70,14 @@ public final class ServerStatusList
     HorizontalLayout root = getContent();
     root.removeAll();
     dotByServerId.clear();
+    stateByServerId.clear();
+    nameByServerId.clear();
     for (CalDavServerConnection server : servers) {
       root.add(buildPill(server));
+      stateByServerId.put(server.id(), State.UNKNOWN);
+      nameByServerId.put(server.id(), server.displayName());
     }
+    logger().info("ServerStatusList rebuilt: {} server(s)", servers.size());
   }
 
   /**
@@ -82,45 +88,42 @@ public final class ServerStatusList
   public void setStatus(String serverId, State state) {
     Span dot = dotByServerId.get(serverId);
     if (dot == null) return;
-    dot.getStyle().set("background", colorFor(state));
+    State previous = stateByServerId.put(serverId, state);
+    applyDotState(dot, state);
+    if (previous != state) {
+      logger().info("Server {} ({}): {} -> {}",
+          nameByServerId.getOrDefault(serverId, serverId), serverId,
+          previous == null ? "UNKNOWN" : previous, state);
+    }
   }
 
   // ── internal ────────────────────────────────────────────────────
 
   private Span buildPill(CalDavServerConnection server) {
     Span dot = new Span();
-    dot.getStyle()
-        .set("display", "inline-block")
-        .set("width", "8px")
-        .set("height", "8px")
-        .set("border-radius", "50%")
-        .set("background", colorFor(State.UNKNOWN))
-        .set("flex-shrink", "0");
+    dot.addClassName("server-status-pill__dot");
+    applyDotState(dot, State.UNKNOWN);
     dotByServerId.put(server.id(), dot);
 
     Span name = new Span(server.displayName());
-    name.getStyle()
-        .set("color", "var(--lumo-body-text-color)")
-        .set("font-size", "var(--lumo-font-size-s)");
+    name.addClassName("server-status-pill__name");
 
     Span pill = new Span(dot, name);
     pill.setId("server-pill-" + server.id());
     pill.getElement().setProperty("title", server.baseUri().toString());
-    pill.getStyle()
-        .set("display", "inline-flex")
-        .set("align-items", "center")
-        .set("gap", "var(--lumo-space-xs)")
-        .set("padding", "2px var(--lumo-space-s)")
-        .set("background", "var(--lumo-contrast-5pct)")
-        .set("border-radius", "var(--lumo-border-radius-l)");
+    pill.addClassName("server-status-pill");
     return pill;
   }
 
-  private static String colorFor(State state) {
-    return switch (state) {
-      case CONNECTED -> "var(--lumo-success-color)";
-      case DISCONNECTED -> "var(--lumo-error-color)";
-      default -> "var(--lumo-contrast-30pct)";
-    };
+  private static void applyDotState(Span dot, State state) {
+    dot.removeClassNames(
+        "server-status-pill__dot--connected",
+        "server-status-pill__dot--disconnected",
+        "server-status-pill__dot--unknown");
+    dot.addClassName(switch (state) {
+      case CONNECTED -> "server-status-pill__dot--connected";
+      case DISCONNECTED -> "server-status-pill__dot--disconnected";
+      default -> "server-status-pill__dot--unknown";
+    });
   }
 }

@@ -16,6 +16,7 @@
 
 package com.svenruppert.flow.views.calendar;
 
+import com.svenruppert.dependencies.core.logger.HasLogger;
 import com.svenruppert.flow.i18n.I18nSupport;
 import com.vaadin.flow.component.Composite;
 import com.vaadin.flow.component.html.Span;
@@ -30,7 +31,7 @@ import com.vaadin.flow.component.html.Span;
  * {@code onReconnect} hook configured at construction time.
  */
 public final class ConnectionStatusBadge
-    extends Composite<Span> implements I18nSupport {
+    extends Composite<Span> implements I18nSupport, HasLogger {
 
   public enum State { UNKNOWN, CONNECTED, DISCONNECTED }
 
@@ -54,18 +55,23 @@ public final class ConnectionStatusBadge
   }
 
   public void markConnected() {
-    boolean wasOffline = state == State.DISCONNECTED;
+    State previous = state;
     state = State.CONNECTED;
     Span s = getContent();
     s.setText(tr(K_STATUS_CONNECTED, "Connected"));
     s.getElement().setAttribute("theme", "badge success");
     s.getElement().setProperty("title", "");
-    if (wasOffline && onReconnect != null) {
+    if (previous != State.CONNECTED) {
+      logger().info("ConnectionStatusBadge: {} -> CONNECTED", previous);
+    }
+    if (previous == State.DISCONNECTED && onReconnect != null) {
+      logger().info("ConnectionStatusBadge: triggering onReconnect handler");
       onReconnect.run();
     }
   }
 
   public void markDisconnected(String reason) {
+    State previous = state;
     state = State.DISCONNECTED;
     Span s = getContent();
     s.setText(tr(K_STATUS_DISCONNECTED, "Disconnected"));
@@ -73,13 +79,21 @@ public final class ConnectionStatusBadge
     if (reason != null && !reason.isBlank()) {
       s.getElement().setProperty("title", reason);
     }
+    if (previous != State.DISCONNECTED) {
+      logger().info("ConnectionStatusBadge: {} -> DISCONNECTED ({})",
+          previous, reason == null ? "no reason" : reason);
+    }
   }
 
   public void markUnknown() {
+    State previous = state;
     state = State.UNKNOWN;
     Span s = getContent();
     s.setText(tr(K_STATUS_UNKNOWN, "Unknown"));
     s.getElement().setAttribute("theme", "badge contrast");
     s.getElement().setProperty("title", "");
+    if (previous != State.UNKNOWN) {
+      logger().info("ConnectionStatusBadge: {} -> UNKNOWN", previous);
+    }
   }
 }

@@ -162,11 +162,14 @@ public final class CalDavClient implements HasLogger {
     HttpResponse<String> resp = send(req);
     int code = resp.statusCode();
     if (code != HttpStatus.MULTI_STATUS.code()) {
-      logger().warn("REPORT calendar-query for {} returned {} (expected 207)",
-          componentName, code);
+      logger().warn("REPORT {} {} -> HTTP {} (expected 207)",
+          componentName, collectionUri, code);
       return List.of();
     }
-    return parseMultistatus(resp.body());
+    List<RemoteEvent> parsed = parseMultistatus(resp.body());
+    logger().info("REPORT {} {} -> {} entries", componentName,
+        collectionUri, parsed.size());
+    return parsed;
   }
 
   /**
@@ -180,7 +183,10 @@ public final class CalDavClient implements HasLogger {
         .PUT(HttpRequest.BodyPublishers.ofString(iCalBody, StandardCharsets.UTF_8))
         .build();
     HttpResponse<String> resp = send(req);
-    return expectPutSuccess(resp);
+    String etag = expectPutSuccess(resp);
+    logger().info("PUT(new) {} -> HTTP {} etag={}",
+        eventUri, resp.statusCode(), etag);
+    return etag;
   }
 
   /**
@@ -194,7 +200,10 @@ public final class CalDavClient implements HasLogger {
         .PUT(HttpRequest.BodyPublishers.ofString(iCalBody, StandardCharsets.UTF_8))
         .build();
     HttpResponse<String> resp = send(req);
-    return expectPutSuccess(resp);
+    String etag = expectPutSuccess(resp);
+    logger().info("PUT(update) {} -> HTTP {} etag {} -> {}",
+        eventUri, resp.statusCode(), expectedEtag, etag);
+    return etag;
   }
 
   /**
@@ -213,12 +222,16 @@ public final class CalDavClient implements HasLogger {
     if (status == HttpStatus.NO_CONTENT
         || status == HttpStatus.OK
         || status == HttpStatus.NOT_FOUND) {
+      logger().info("DELETE {} -> HTTP {}", eventUri, code);
       return;
     }
     if (status == HttpStatus.PRECONDITION_FAILED) {
+      logger().warn("DELETE {} -> HTTP 412 (stale ETag {})",
+          eventUri, expectedEtag);
       throw new ConcurrentModificationException(
           "Stale ETag on DELETE for " + eventUri);
     }
+    logger().warn("DELETE {} -> HTTP {} (unexpected)", eventUri, code);
     throw new IllegalStateException(
         "DELETE " + eventUri + " failed with HTTP " + code);
   }
@@ -326,13 +339,16 @@ public final class CalDavClient implements HasLogger {
     int code = resp.statusCode();
     HttpStatus status = HttpStatus.fromCode(code);
     if (status == HttpStatus.NOT_FOUND) {
+      logger().info("GET {} -> HTTP 404 (not found)", uri);
       throw new NoSuchElementException("No event at " + uri);
     }
     if (status != HttpStatus.OK) {
+      logger().warn("GET {} -> HTTP {} (unexpected)", uri, code);
       throw new IllegalStateException("GET " + uri + " failed with HTTP " + code);
     }
     String etag = resp.headers().firstValue("ETag")
         .orElseThrow(() -> new IllegalStateException("GET response missing ETag"));
+    logger().info("GET {} -> HTTP 200 etag={}", uri, etag);
     return new RemoteEvent(uri, etag, resp.body());
   }
 }
