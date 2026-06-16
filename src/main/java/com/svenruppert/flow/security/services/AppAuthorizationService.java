@@ -37,6 +37,7 @@ import static com.svenruppert.flow.security.permissions.AppPermission.ADMIN_ROLE
 import static com.svenruppert.flow.security.permissions.AppPermission.ADMIN_SESSIONS;
 import static com.svenruppert.flow.security.permissions.AppPermission.APP_VIEW;
 import static com.svenruppert.flow.security.permissions.AppPermission.AUDIT_READ;
+import static com.svenruppert.flow.security.permissions.AppPermission.CALENDAR_READ;
 
 /**
  * Role → permission table. SPI-registered via
@@ -56,9 +57,11 @@ public class AppAuthorizationService
           APP_VIEW.permissionName(),
           AUDIT_READ.permissionName(),
           ADMIN_SESSIONS.permissionName(),
-          ADMIN_ROLES.permissionName()))
+          ADMIN_ROLES.permissionName(),
+          CALENDAR_READ.permissionName()))
       .put(roleName(AuthorizationRole.USER), Set.of(
-          APP_VIEW.permissionName()))
+          APP_VIEW.permissionName(),
+          CALENDAR_READ.permissionName()))
       .build();
 
   @Override

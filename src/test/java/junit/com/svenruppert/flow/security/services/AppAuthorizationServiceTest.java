@@ -40,8 +40,8 @@ class AppAuthorizationServiceTest {
   // ── permissionsFor ─────────────────────────────────────────────
 
   @Test
-  @DisplayName("ADMIN+USER subject gets the full four-permission set")
-  void adminGetsAllFourPermissions() {
+  @DisplayName("ADMIN+USER subject gets the full five-permission set")
+  void adminGetsAllFivePermissions() {
     AppUser admin = new AppUser(1L, "admin",
         EnumSet.of(AuthorizationRole.ADMIN, AuthorizationRole.USER));
 
@@ -50,25 +50,25 @@ class AppAuthorizationServiceTest {
         .collect(Collectors.toSet());
 
     assertEquals(
-        Set.of("app:view", "audit:read", "admin:sessions", "admin:roles"),
+        Set.of("app:view", "audit:read", "admin:sessions", "admin:roles", "calendar:read"),
         perms);
   }
 
   @Test
-  @DisplayName("USER-only subject gets only app:view")
-  void userGetsOnlyAppView() {
+  @DisplayName("USER-only subject gets app:view + calendar:read")
+  void userGetsAppViewAndCalendarRead() {
     AppUser user = new AppUser(2L, "user", EnumSet.of(AuthorizationRole.USER));
 
     Set<String> perms = service.permissionsFor(user).permissionNames().stream()
         .map(PermissionName::value)
         .collect(Collectors.toSet());
 
-    assertEquals(Set.of("app:view"), perms);
+    assertEquals(Set.of("app:view", "calendar:read"), perms);
   }
 
   @Test
-  @DisplayName("ADMIN-only (no USER) still gets the full four — ADMIN's set is complete on its own")
-  void adminAloneGetsFullFour() {
+  @DisplayName("ADMIN-only (no USER) still gets the full five — ADMIN's set is complete on its own")
+  void adminAloneGetsFullFive() {
     AppUser admin = new AppUser(3L, "admin-only",
         EnumSet.of(AuthorizationRole.ADMIN));
 
@@ -77,7 +77,7 @@ class AppAuthorizationServiceTest {
         .collect(Collectors.toSet());
 
     assertEquals(
-        Set.of("app:view", "audit:read", "admin:sessions", "admin:roles"),
+        Set.of("app:view", "audit:read", "admin:sessions", "admin:roles", "calendar:read"),
         perms);
   }
 

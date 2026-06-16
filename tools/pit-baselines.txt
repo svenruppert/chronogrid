@@ -40,3 +40,14 @@ com.svenruppert.flow.security.storage=95
 com.svenruppert.flow.views=22
 com.svenruppert.flow.views.main=35
 com.svenruppert.flow.views.ui=27
+com.svenruppert.flow.views.calendar=0
+
+# Calendar / CalDAV packages — baselined 2026-06-15 after the
+# 13-improvement iteration. Conservative floors (no measurement run
+# in this session); recalibrate after the first
+# `./mvnw -P_mutation-gate org.pitest:pitest-maven:mutationCoverage verify`
+# and raise to within ~5 points of the measured value.
+com.svenruppert.flow.calendar=0
+com.svenruppert.flow.calendar.client=0
+com.svenruppert.flow.calendar.mapping=0
+com.svenruppert.flow.calendar.service=0

@@ -76,6 +76,7 @@ public class MainLayout extends AppLayout
   private static final String K_NAV_ABOUT = "nav.about";
   private static final String K_NAV_YOUTUBE = "nav.youtube";
   private static final String K_NAV_PUSHDEMO = "nav.pushDemo";
+  private static final String K_NAV_CALENDAR = "nav.calendar";
   private static final String K_NAV_AUDIT = "nav.audit";
   private static final String K_NAV_SESSIONS = "nav.sessions";
   private static final String K_NAV_ROLES = "nav.roles";
@@ -155,6 +156,8 @@ public class MainLayout extends AppLayout
     SideNav app = section(tr(K_NAV_SECTION_APPLICATION, "Application"),
         item(tr(K_NAV_DASHBOARD, "Dashboard"), VaadinIcon.DASHBOARD,
             DashboardView.class, "app:view", grants),
+        item(tr(K_NAV_CALENDAR, "Calendar"), VaadinIcon.CALENDAR,
+            CalendarView.class, "calendar:read", grants),
         item(tr(K_NAV_PUSHDEMO, "Push demo"), VaadinIcon.BELL,
             PushDemoView.class, "app:view", grants));
     if (app != null) container.add(app);

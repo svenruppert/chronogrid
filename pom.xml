@@ -157,12 +157,55 @@
     </dependencyManagement>
 
     <dependencies>
+
+        <dependency>
+            <groupId>com.svenruppert</groupId>
+            <artifactId>caldav-testbench</artifactId>
+            <scope>test</scope>
+            <version>00.10.00</version>
+        </dependency>
+
+        <!--
+            FullCalendar Vaadin add-on (Stefan Uebe, MIT). Provides the
+            FullCalendar.io web component wrapper used by CalendarView.
+            EntryProvider.fromCallbacks is the integration point for the
+            CalDAV-backed CalendarService.
+        -->
+        <dependency>
+            <groupId>org.vaadin.stefan</groupId>
+            <artifactId>fullcalendar2</artifactId>
+            <version>7.2.1</version>
+        </dependency>
+
+        <!--
+            iCalendar parsing / VEVENT building for the CalDAV client.
+            Same library the caldav-testbench server uses, so the wire
+            format on both sides is identical. Runtime scope: needed by
+            EntryMapper at production runtime, not just in tests.
+        -->
+        <dependency>
+            <groupId>net.sf.biweekly</groupId>
+            <artifactId>biweekly</artifactId>
+            <version>0.6.8</version>
+        </dependency>
+
         <!-- Nur zum Kompilieren, nicht bundlen -->
         <dependency>
             <groupId>jakarta.servlet</groupId>
             <artifactId>jakarta.servlet-api</artifactId>
             <version>6.1.0</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!--
+            functional-reactive Result<T, E> — used on the CalendarService
+            boundary so the View can chain peek/peekFailure instead of
+            try/catch. CalDavClient / CalDavDiscovery remain
+            exception-based; the service translates at the seam.
+        -->
+        <dependency>
+            <groupId>com.svenruppert</groupId>
+            <artifactId>functional-reactive</artifactId>
         </dependency>
         <dependency>
             <groupId>com.vaadin</groupId>
@@ -748,7 +791,7 @@
                                             Sets the Main-Class. Required for `java -jar`.
                                         -->
                                         <transformer
-                                            implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                                implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                             <mainClass>${app.main.class}</mainClass>
                                         </transformer>
                                         <!--
@@ -762,7 +805,7 @@
                                             each other and ServiceLoader would find only one.
                                         -->
                                         <transformer
-                                            implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                                implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                                     </transformers>
                                     <filters>
                                         <filter>

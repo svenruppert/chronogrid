@@ -37,12 +37,13 @@ class AppPermissionTest {
     assertEquals("audit:read", AppPermission.AUDIT_READ.permissionName().value());
     assertEquals("admin:sessions", AppPermission.ADMIN_SESSIONS.permissionName().value());
     assertEquals("admin:roles", AppPermission.ADMIN_ROLES.permissionName().value());
+    assertEquals("calendar:read", AppPermission.CALENDAR_READ.permissionName().value());
   }
 
   @Test
-  @DisplayName("all four enum constants exist — kills enum-truncation mutants")
-  void hasExactlyFourConstants() {
-    assertEquals(4, AppPermission.values().length);
+  @DisplayName("all five enum constants exist — kills enum-truncation mutants")
+  void hasExactlyFiveConstants() {
+    assertEquals(5, AppPermission.values().length);
   }
 
   @Test
@@ -51,7 +52,7 @@ class AppPermissionTest {
     Set<String> values = EnumSet.allOf(AppPermission.class).stream()
         .map(p -> p.permissionName().value())
         .collect(Collectors.toSet());
-    assertEquals(4, values.size());
+    assertEquals(5, values.size());
   }
 
   @Test

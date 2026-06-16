@@ -31,7 +31,8 @@ public enum AppPermission {
   APP_VIEW("app:view"),
   AUDIT_READ("audit:read"),
   ADMIN_SESSIONS("admin:sessions"),
-  ADMIN_ROLES("admin:roles");
+  ADMIN_ROLES("admin:roles"),
+  CALENDAR_READ("calendar:read");
 
   private final PermissionName permissionName;
 

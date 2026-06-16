@@ -42,3 +42,4 @@ build/
 ### jSentinel persistence — Eclipse-Store data dir, bootstrap token ###
 /data/
 /node_modules/
+/Appl-iCloud-Password.txt

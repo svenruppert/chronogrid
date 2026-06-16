@@ -1,0 +1,73 @@
+/*
+ * Polish for the CalendarView's embedded FullCalendar grid.
+ *
+ * - Alternating background tint on day columns and hour rows so
+ *   columns/rows visually separate without heavy gridlines.
+ * - Stronger hour separator lines (full hour vs. half-hour) so the
+ *   time grid is readable in the light Lumo theme where the FC
+ *   default lines are nearly invisible.
+ * - Slightly cleaner hour labels (tabular-nums + secondary colour).
+ *
+ * Selectors target FullCalendar v6 light-DOM class names; they only
+ * apply inside the calendar widget and don't bleed elsewhere.
+ */
+
+/* ── Alternating columns / rows ──────────────────────────────── */
+
+/* Day columns in TimeGrid views (Day, Week, N-days). */
+.fc .fc-timegrid-cols td.fc-day:nth-of-type(even),
+.fc .fc-col-header-cell:nth-of-type(even) {
+    background-color: var(--lumo-contrast-5pct);
+}
+
+/* Hour slot lanes (rows) in TimeGrid views. */
+.fc .fc-timegrid-slot-lane:nth-of-type(even),
+.fc .fc-timegrid-slot:nth-of-type(even) {
+    background-color: var(--lumo-contrast-5pct);
+}
+
+/* Month-view day cells: alternate per row for some visual rhythm
+   without overwhelming the holiday/weekend styling. */
+.fc .fc-daygrid-day:nth-of-type(even) {
+    background-color: var(--lumo-contrast-5pct);
+}
+
+/* ── Stronger hour separator lines ───────────────────────────── */
+
+/* Full-hour boundaries — visible in light theme. */
+.fc .fc-timegrid-slots tr.fc-timegrid-slot td {
+    border-top: 1px solid var(--lumo-contrast-20pct);
+}
+
+/* Half-hour (minor) boundary — dotted, lighter. */
+.fc .fc-timegrid-slots tr.fc-timegrid-slot.fc-timegrid-slot-minor td {
+    border-top: 1px dotted var(--lumo-contrast-15pct);
+}
+
+/* Vertical day-column separators a touch stronger so columns frame
+   themselves clearly. */
+.fc .fc-timegrid-col,
+.fc .fc-col-header-cell {
+    border-color: var(--lumo-contrast-15pct);
+}
+
+/* All-day-row + axis frame around the time grid. */
+.fc .fc-timegrid-divider,
+.fc .fc-scrollgrid,
+.fc .fc-scrollgrid-section > * {
+    border-color: var(--lumo-contrast-20pct);
+}
+
+/* Month-view day cell borders also a touch stronger. */
+.fc .fc-daygrid-day,
+.fc .fc-daygrid-day-frame {
+    border-color: var(--lumo-contrast-15pct);
+}
+
+/* ── Hour labels polish ──────────────────────────────────────── */
+
+.fc .fc-timegrid-slot-label,
+.fc .fc-timegrid-axis-cushion {
+    color: var(--lumo-secondary-text-color);
+    font-variant-numeric: tabular-nums;
+}
