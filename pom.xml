@@ -5,25 +5,30 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.svenruppert</groupId>
-    <artifactId>caldav-demo-reactor</artifactId>
-    <version>00.10.01-SNAPSHOT</version>
+    <artifactId>chronogrid-parent</artifactId>
+    <version>01.00.00-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>Calendar / CalDAV Demo — Reactor</name>
+    <name>ChronoGrid — Reactor parent</name>
     <description>
-        Multi-module reactor for the Calendar / CalDAV companion demo.
+        ChronoGrid — A native Vaadin Flow calendar component for Java
+        applications.
 
-        Phase 2a of the Calendar component extraction: the existing
-        single-module demo moves under demo/. Phases 2b and 2c will
-        carve out calendar-caldav (headless: client + mapping + service)
-        and calendar-component (Vaadin UI) as sibling modules.
+        Reactor parent for the three modules:
+
+        - chronogrid-core    headless CalDAV wire + iCalendar mapping
+                             + service façade
+        - chronogrid         drop-in Vaadin Flow add-on (ChronoGrid
+                             composite + sub-components, bundled CSS)
+        - chronogrid-demo    the consuming application that doubles
+                             as the integration-test harness
 
         Each module inherits directly from com.svenruppert:dependencies;
         this reactor keeps no shared dependency / plugin configuration
         of its own beyond the module list.
     </description>
 
-    <url>https://github.com/Java-Publications/Blog---Vaadin---Calendar-and-CalDav</url>
+    <url>https://github.com/svenruppert/chronogrid</url>
     <inceptionYear>2023</inceptionYear>
 
     <organization>
@@ -44,9 +49,21 @@
         </developer>
     </developers>
 
+    <scm>
+        <url>https://github.com/svenruppert/chronogrid</url>
+        <connection>scm:git:https://github.com/svenruppert/chronogrid.git</connection>
+        <developerConnection>scm:git:https://github.com/svenruppert/chronogrid.git</developerConnection>
+        <tag>HEAD</tag>
+    </scm>
+
+    <issueManagement>
+        <system>GitHub</system>
+        <url>https://github.com/svenruppert/chronogrid/issues</url>
+    </issueManagement>
+
     <modules>
-        <module>calendar-caldav</module>
-        <module>calendar-component</module>
-        <module>demo</module>
+        <module>chronogrid-core</module>
+        <module>chronogrid</module>
+        <module>chronogrid-demo</module>
     </modules>
 </project>

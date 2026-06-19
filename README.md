@@ -1,10 +1,22 @@
-# Vaadin + FullCalendar against a CalDAV server
+# ChronoGrid
 
-Companion code for the blog post on building a CalDAV-backed calendar
-in Vaadin Flow. The application is a working demo: a `Calendar` view
-that talks plain CalDAV (`PUT` / `GET` / `DELETE` / `REPORT
-calendar-query`) to a configurable collection, with ETag-aware writes
-and proper 412 conflict handling.
+**A native Vaadin Flow calendar component for Java applications.**
+
+ChronoGrid is a drop-in Vaadin Flow Composite that renders a CalDAV-
+backed calendar with multi-server / multi-subscription support,
+per-subscription colour picker, rolling N-days view, in-app discovery,
+and the standard PUT / GET / DELETE / REPORT / PROPFIND wire stack
+under the hood. The headless CalDAV layer is published as a separate
+artefact so headless consumers (CLI tools, sync jobs, Spring Boot
+services) can pull it without dragging the Vaadin runtime along.
+
+The repo ships as a Maven reactor with three modules:
+
+| Module | Coordinates |
+|---|---|
+| **`chronogrid-core`** | `com.svenruppert.chronogrid:chronogrid-core` — headless CalDAV wire + iCalendar mapping + service façade |
+| **`chronogrid`** | `com.svenruppert.chronogrid:chronogrid` — Vaadin Flow add-on (the `ChronoGrid` composite + sub-components + bundled CSS) |
+| **`chronogrid-demo`** | `com.svenruppert:chronogrid-demo` — the consuming application; doubles as the end-to-end integration harness |
 
 The demo is wired against [`com.svenruppert:caldav-testbench`](https://8g8.eu/caldav)
 for local development — an in-memory CalDAV server you can boot in
@@ -22,37 +34,37 @@ below for the walkthrough.
 
 | Slice | What it does | Where it lives |
 |---|---|---|
-| **CalDAV client** | JDK `HttpClient` for `PUT/GET/DELETE/REPORT`, XXE-hardened JAXP for `<multistatus>` parsing, 412 → `ConcurrentModificationException` | `calendar-caldav: client/CalDavClient.java` |
-| **iCalendar mapping** | Biweekly-backed `VEVENT ↔ FullCalendar Entry` roundtrip, ETag and href stashed as custom properties | `calendar-caldav: mapping/EntryMapper.java` |
-| **Service façade** | Split read/write methods (the jSentinel permission seam), conflict detection on `save` | `calendar-caldav: service/CalendarService.java` |
-| **FullCalendar view** | Month view, `EntryProvider.fromCallbacks` for range queries, edit-dialog + drag/drop/resize listeners, conflict notification, toolbar with Settings / Refresh / New event buttons | `calendar-component: ui/CalendarView.java` |
-| **Runtime CalDAV settings** | In-app Settings dialog: switch the collection URI + HTTP Basic credentials at runtime, persisted on `VaadinSession`. Test-connection button probes the server before saving. | `calendar-component: ui/CalendarView.java`, `calendar-caldav: service/CalDavConnectionConfig.java` |
-| **Calendar discovery** | Three-step `PROPFIND` chain (current-user-principal → calendar-home-set → list) behind the *Discover calendars* button in Settings — pick from the dropdown, the URI field is filled in for you. | `calendar-caldav: client/CalDavDiscovery.java`, `calendar-caldav: client/DiscoveredCalendar.java` |
-| **Provider quick-connect** | One-click presets in the Settings dialog. Currently ships Apple iCloud (entry URL + 2FA / app-password warning); the catalogue is a single-list extension point for adding Nextcloud, Radicale, Baïkal, … later. | `calendar-caldav: service/CalDavProviderPreset.java` |
-| **Subscription management** | Toolbar Subscriptions button → Grid with per-row Visible toggle (hide without disconnect) and ✕ Disconnect (drop entirely). Subscriptions live on `VaadinSession` and are colour-stamped from the server's `<C:calendar-color>` (with a palette fallback). | `calendar-caldav: service/CalendarSubscription.java`, `calendar-component: ui/SubscriptionsDialog.java` |
-| **Multi-server connections** | Each subscription remembers its owning server (id + creds). Settings → Save adds a server; a second Save with a different URI adds a second server. Service routes each subscription's wire calls through the matching server's credentials. | `calendar-caldav: service/CalDavServerConnection.java`, `CalendarService.fromConnections(...)` |
-| **Per-event target calendar** | The New-event dialog carries a *Calendar* dropdown populated from the visible subscriptions; the new event's `PUT` lands in the chosen URI with that server's creds. | `calendar-component: ui/EventEditorDialog.java`, `CalendarService.save(Entry, URI)` |
-| **All-connections status board** | Toolbar Connections button → Grid with one row per configured server (name, base URI, auth, live status pill). Status is probed on open via `REPORT` against that server's first subscription. | `calendar-component: ui/ConnectionsDialog.java` |
-| **Editor server filter + rich calendar items** | The New-event dialog grows a *Server* filter above *Calendar* when more than one server is connected. Each calendar option renders as colour swatch + name + server name. | `calendar-component: ui/EventEditorDialog.java` |
-| **Polished navigation strip** | Custom Lumo-themed bar above the grid: prev/today/next icon group + DatePicker + large interval label + segmented Day/Week/N-days/Month switcher + N-days spinner (1–21, persisted across view switches). Replaces FullCalendar's built-in toolbar. | `calendar-component: ui/CalendarNavigationBar.java` |
-| **Framed CalendarView** | The whole view sits inside a card-style Lumo frame (rounded border + soft shadow + space against the surrounding AppLayout). FullCalendar's built-in toolbar is fully disabled via `headerToolbar: false` so the only navigation is the one we built. | `calendar-component: ui/CalendarView.java` |
-| **Per-subscription colour picker** | The Subscriptions dialog's first column is an interactive HTML5 `<input type="color">` per row. Choosing a colour persists on the subscription record and is applied to every entry from that source on the next render — overrides the deterministic palette `CalendarService` ships. | `calendar-component: ui/SubscriptionsDialog.java`, `CalendarSubscription.withColor` |
-| **Per-server status pills** | Toolbar shows one compact pill per configured server: coloured dot (green/red/grey) + logical name + URL tooltip. No raw URLs cluttering the bar; probe runs on attach and every 15 s alongside the connection badge. | `calendar-component: ui/ServerStatusList.java` |
-| **Zebra calendar grid** | Subtle alternating tint on day columns + hour lanes in Day/Week/N-days; alternating cells in Month. CSS-only via `@CssImport`, scoped to FullCalendar's class names. | `calendar-component: META-INF/resources/frontend/styles/calendar-view.css` |
-| **Live connection badge** | Coloured Connected / Disconnected / Unknown pill in the toolbar, updated passively after every CalDAV call and actively via a 15 s background poll. On reconnect: notification + automatic refresh. | `calendar-component: ui/CalendarView.java` (`ConnectionState`) |
-| **Dev launcher (CalDAV side)** | Boots `caldav-testbench` on port `5232`, prints discovery URL, parks on Ctrl+C | `start-caldav-dev-server.sh` → `calendar-caldav: CalDavDevServer.java (test)` |
-| **Dev launcher (Vaadin side)** | Embedded nano-vaadin-jetty `main` that pre-wires `app.caldav.baseUri` to the testbench so the app is connected on first start | `start-vaadin-demo.sh` → `demo: CalDavDemo.java` |
-| **Tests** | `EntryMapperTest` + `CalDavClientIT` + `CalendarServiceIT` + `CalendarViewBrowserlessTest` — all against the live testbench | `calendar-caldav/src/test/.../calendar/` |
+| **CalDAV client** | JDK `HttpClient` for `PUT/GET/DELETE/REPORT`, XXE-hardened JAXP for `<multistatus>` parsing, 412 → `ConcurrentModificationException` | `chronogrid-core: client/CalDavClient.java` |
+| **iCalendar mapping** | Biweekly-backed `VEVENT ↔ FullCalendar Entry` roundtrip, ETag and href stashed as custom properties | `chronogrid-core: mapping/EntryMapper.java` |
+| **Service façade** | Split read/write methods (the jSentinel permission seam), conflict detection on `save` | `chronogrid-core: service/CalendarService.java` |
+| **FullCalendar view** | Month view, `EntryProvider.fromCallbacks` for range queries, edit-dialog + drag/drop/resize listeners, conflict notification, toolbar with Settings / Refresh / New event buttons | `chronogrid: ui/ChronoGrid.java` |
+| **Runtime CalDAV settings** | In-app Settings dialog: switch the collection URI + HTTP Basic credentials at runtime, persisted on `VaadinSession`. Test-connection button probes the server before saving. | `chronogrid: ui/ChronoGrid.java`, `chronogrid-core: service/CalDavConnectionConfig.java` |
+| **Calendar discovery** | Three-step `PROPFIND` chain (current-user-principal → calendar-home-set → list) behind the *Discover calendars* button in Settings — pick from the dropdown, the URI field is filled in for you. | `chronogrid-core: client/CalDavDiscovery.java`, `chronogrid-core: client/DiscoveredCalendar.java` |
+| **Provider quick-connect** | One-click presets in the Settings dialog. Currently ships Apple iCloud (entry URL + 2FA / app-password warning); the catalogue is a single-list extension point for adding Nextcloud, Radicale, Baïkal, … later. | `chronogrid-core: service/CalDavProviderPreset.java` |
+| **Subscription management** | Toolbar Subscriptions button → Grid with per-row Visible toggle (hide without disconnect) and ✕ Disconnect (drop entirely). Subscriptions live on `VaadinSession` and are colour-stamped from the server's `<C:calendar-color>` (with a palette fallback). | `chronogrid-core: service/CalendarSubscription.java`, `chronogrid: ui/SubscriptionsDialog.java` |
+| **Multi-server connections** | Each subscription remembers its owning server (id + creds). Settings → Save adds a server; a second Save with a different URI adds a second server. Service routes each subscription's wire calls through the matching server's credentials. | `chronogrid-core: service/CalDavServerConnection.java`, `CalendarService.fromConnections(...)` |
+| **Per-event target calendar** | The New-event dialog carries a *Calendar* dropdown populated from the visible subscriptions; the new event's `PUT` lands in the chosen URI with that server's creds. | `chronogrid: ui/EventEditorDialog.java`, `CalendarService.save(Entry, URI)` |
+| **All-connections status board** | Toolbar Connections button → Grid with one row per configured server (name, base URI, auth, live status pill). Status is probed on open via `REPORT` against that server's first subscription. | `chronogrid: ui/ConnectionsDialog.java` |
+| **Editor server filter + rich calendar items** | The New-event dialog grows a *Server* filter above *Calendar* when more than one server is connected. Each calendar option renders as colour swatch + name + server name. | `chronogrid: ui/EventEditorDialog.java` |
+| **Polished navigation strip** | Custom Lumo-themed bar above the grid: prev/today/next icon group + DatePicker + large interval label + segmented Day/Week/N-days/Month switcher + N-days spinner (1–21, persisted across view switches). Replaces FullCalendar's built-in toolbar. | `chronogrid: ui/CalendarNavigationBar.java` |
+| **Framed ChronoGrid** | The whole view sits inside a card-style Lumo frame (rounded border + soft shadow + space against the surrounding AppLayout). FullCalendar's built-in toolbar is fully disabled via `headerToolbar: false` so the only navigation is the one we built. | `chronogrid: ui/ChronoGrid.java` |
+| **Per-subscription colour picker** | The Subscriptions dialog's first column is an interactive HTML5 `<input type="color">` per row. Choosing a colour persists on the subscription record and is applied to every entry from that source on the next render — overrides the deterministic palette `CalendarService` ships. | `chronogrid: ui/SubscriptionsDialog.java`, `CalendarSubscription.withColor` |
+| **Per-server status pills** | Toolbar shows one compact pill per configured server: coloured dot (green/red/grey) + logical name + URL tooltip. No raw URLs cluttering the bar; probe runs on attach and every 15 s alongside the connection badge. | `chronogrid: ui/ServerStatusList.java` |
+| **Zebra calendar grid** | Subtle alternating tint on day columns + hour lanes in Day/Week/N-days; alternating cells in Month. CSS-only via `@CssImport`, scoped to FullCalendar's class names. | `chronogrid: META-INF/resources/frontend/styles/chronogrid.css` |
+| **Live connection badge** | Coloured Connected / Disconnected / Unknown pill in the toolbar, updated passively after every CalDAV call and actively via a 15 s background poll. On reconnect: notification + automatic refresh. | `chronogrid: ui/ChronoGrid.java` (`ConnectionState`) |
+| **Dev launcher (CalDAV side)** | Boots `caldav-testbench` on port `5232`, prints discovery URL, parks on Ctrl+C | `start-caldav-dev-server.sh` → `chronogrid-core: CalDavDevServer.java (test)` |
+| **Dev launcher (Vaadin side)** | Embedded nano-vaadin-jetty `main` that pre-wires `app.caldav.baseUri` to the testbench so the app is connected on first start | `start-vaadin-demo.sh` → `chronogrid-demo: CalDavDemo.java` |
+| **Tests** | `EntryMapperTest` + `CalDavClientIT` + `CalendarServiceIT` + `ChronoGridBrowserlessTest` — all against the live testbench | `chronogrid-core/src/test/.../calendar/` |
 
 ## Quick start
 
 The project is a Maven reactor; the runnable application lives in
-the `demo/` sub-module.
+the `chronogrid-demo/` sub-module.
 
 ```bash
-./mvnw -pl demo                     # default goal = jetty:run on :8080
+./mvnw -pl chronogrid-demo                     # default goal = jetty:run on :8080
 # or equivalently:
-( cd demo && ../mvnw )
+( cd chronogrid-demo && ../mvnw )
 ```
 
 The first start prints a bootstrap token to stdout and writes it to
@@ -68,8 +80,8 @@ section covers the three ways to point it at something useful.
 
 ## Using the calendar component in your own Vaadin app
 
-`calendar-component` is published as a drop-in Vaadin Flow add-on.
-The demo in `demo/` is one consumer; this section is for the *other*
+`chronogrid` is published as a drop-in Vaadin Flow add-on.
+The demo in `chronogrid-demo/` is one consumer; this section is for the *other*
 consumers — any Vaadin app that wants to mount a CalDAV-backed
 calendar with the host's own routing, security and i18n stack.
 
@@ -77,21 +89,21 @@ calendar with the host's own routing, security and i18n stack.
 
 ```xml
 <dependency>
-    <groupId>com.svenruppert.vaadin.calendar</groupId>
-    <artifactId>calendar-component</artifactId>
+    <groupId>com.svenruppert.chronogrid</groupId>
+    <artifactId>chronogrid</artifactId>
     <version>00.10.00</version>
 </dependency>
 ```
 
-The component module transitively brings `calendar-caldav` (headless
+The component module transitively brings `chronogrid-core` (headless
 wire + service), `org.vaadin.stefan:fullcalendar2`, `net.sf.biweekly`,
 and `com.svenruppert:functional-reactive`. The bundled CSS lives in
-`META-INF/resources/frontend/styles/calendar-view.css` — Vaadin's
+`META-INF/resources/frontend/styles/chronogrid.css` — Vaadin's
 frontend bundler picks it up automatically.
 
 ### 2. Write a route wrapper in the host app
 
-`CalendarView` carries no `@Route`, no `@VisibleFor`, no layout
+`ChronoGrid` carries no `@Route`, no `@VisibleFor`, no layout
 binding — those are the host's concerns. The wrapper is a few lines:
 
 ```java
@@ -103,13 +115,13 @@ public final class CalendarRouteView
     public CalendarRouteView() {
         CalendarStateStore store    = new VaadinSessionCalendarStateStore();
         CalendarMessages   messages = this::tr;     // your I18nSupport.tr(...)
-        CalendarView       calendar = new CalendarView(store, messages);
+        ChronoGrid       calendar = new ChronoGrid(store, messages);
         getContent().getElement().appendChild(calendar.getElement());
     }
 }
 ```
 
-That's all. `CalendarView` reads/writes the user's configured CalDAV
+That's all. `ChronoGrid` reads/writes the user's configured CalDAV
 connection through `store`, looks every user-facing string up through
 `messages`, and bootstraps a default `CalendarService` from the first
 quick-connect preset (Apple iCloud) when the store has nothing
@@ -121,7 +133,7 @@ stored yet.
 |---|---|---|
 | **`CalendarStateStore`** | `VaadinSessionCalendarStateStore` — Connection / Servers / Subscriptions / N-days slider live on the current `VaadinSession`; everything resets on logout. | Switch to a DB- or file-backed store when users should keep their CalDAV configuration across logins, or when running multi-tab and the session-isolation gets in the way. |
 | **`CalendarMessages`** | `CalendarMessages.fallbackOnly()` — uses the English fallbacks baked into the call sites. | Wire up your host's i18n. For the demo's `I18nSupport`-style API: `(k, fb, args) -> tr(k, fb, args)`. For Spring's `MessageSource`, ResourceBundle, or anything else: same shape, different lookup. |
-| **`CalendarService`** *(optional)* | Resolves from the store's connection config, falls back to `CalDavProviderPreset.DEFAULTS.get(0)` (Apple iCloud quick-connect). | Use the four-arg constructor `new CalendarView(store, messages, service)` when you want to bootstrap with a pre-built service — e.g. a multi-server fan-out, or a testbench-backed service in tests. |
+| **`CalendarService`** *(optional)* | Resolves from the store's connection config, falls back to `CalDavProviderPreset.DEFAULTS.get(0)` (Apple iCloud quick-connect). | Use the four-arg constructor `new ChronoGrid(store, messages, service)` when you want to bootstrap with a pre-built service — e.g. a multi-server fan-out, or a testbench-backed service in tests. |
 
 ### 4. Customising the quick-connect catalogue
 
@@ -129,13 +141,13 @@ The Settings dialog renders one button per `CalDavProviderPreset` in
 the bundled `DEFAULTS` list (currently just Apple iCloud). Nextcloud,
 Radicale, Baïkal, mailbox.org and similar entries would be drop-in
 additions to that list when the catalogue extension API ships — for
-now, the host can wrap `CalendarView` and pre-seed the store's
+now, the host can wrap `ChronoGrid` and pre-seed the store's
 connection config to skip the catalogue entirely.
 
 ### 5. Styling
 
-The bundled CSS uses BEM-ish class names (`.calendar-view__frame`,
-`.calendar-nav__group`, `.server-status-pill__dot--connected`, …)
+The bundled CSS uses BEM-ish class names (`.chronogrid__frame`,
+`.chronogrid-nav__group`, `.server-status-pill__dot--connected`, …)
 and Lumo custom properties throughout (`--lumo-primary-color`,
 `--lumo-contrast-5pct`, …). Override either in your own theme's CSS;
 no Lumo-fork required.
@@ -146,11 +158,11 @@ dynamic values stay out of inline `style="…"` attributes.
 
 ### Reference
 
-- [`calendar-caldav/README.md`](calendar-caldav/README.md) — headless
+- [`chronogrid-core/README.md`](chronogrid-core/README.md) — headless
   layer: minimal CLI / service example, package map, presets API.
-- [`calendar-component/README.md`](calendar-component/README.md) —
+- [`chronogrid/README.md`](chronogrid/README.md) —
   Vaadin layer: mount wrapper, customisation cookbook.
-- [`docs/CALENDAR_COMPONENT_EXTRACTION.md`](docs/CALENDAR_COMPONENT_EXTRACTION.md) —
+- [`docs/CHRONOGRID_EXTRACTION.md`](docs/CHRONOGRID_EXTRACTION.md) —
   why the module split looks the way it does + journey notes.
 
 ## Running with a CalDAV backend
@@ -158,8 +170,8 @@ dynamic values stay out of inline `style="…"` attributes.
 ### Option A — bundled `caldav-testbench` (no Docker, no external server)
 
 The project ships [`com.svenruppert:caldav-testbench`](https://8g8.eu/caldav)
-as a test-scope dependency of `calendar-caldav`. A dev launcher under
-`calendar-caldav/src/test/java/junit/com/svenruppert/vaadin/calendar/CalDavDevServer.java`
+as a test-scope dependency of `chronogrid-core`. A dev launcher under
+`chronogrid-core/src/test/java/junit/com/svenruppert/vaadin/calendar/CalDavDevServer.java`
 starts the in-memory server on port `5232`, seeded with a single
 calendar collection named `personal`, and parks until you hit Ctrl+C.
 The project root carries
@@ -200,18 +212,18 @@ embedded Jetty would fail with
 The raw equivalents (in case you prefer typing it out):
 
 ```bash
-./mvnw -pl calendar-caldav exec:java \
+./mvnw -pl chronogrid-core exec:java \
        -Dexec.classpathScope=test \
-       -Dexec.mainClass=junit.com.svenruppert.vaadin.calendar.CalDavDevServer
+       -Dexec.mainClass=junit.com.svenruppert.chronogrid.CalDavDevServer
 
-./mvnw -pl demo exec:java \
+./mvnw -pl chronogrid-demo exec:java \
        -Dexec.classpathScope=test \
        -Dexec.mainClass=com.svenruppert.flow.CalDavDemo
 ```
 
 #### IDE one-click: `CalDavDemo.main`
 
-Open `demo/src/main/java/com/svenruppert/flow/CalDavDemo.java` in your
+Open `chronogrid-chronogrid-demo/src/main/java/com/svenruppert/flow/CalDavDemo.java` in your
 IDE and hit Run. The class pre-sets `app.caldav.baseUri` to the
 testbench's default collection URL
 (`http://127.0.0.1:5232/calendars/personal/`) before handing off to
@@ -321,7 +333,7 @@ The integration tests already spin up the testbench themselves — no
 separate process needed. The full end-to-end calendar suite is:
 
 ```bash
-./mvnw test -Dtest='EntryMapperTest,CalDavClientIT,CalendarServiceIT,CalendarViewBrowserlessTest'
+./mvnw test -Dtest='EntryMapperTest,CalDavClientIT,CalendarServiceIT,ChronoGridBrowserlessTest'
 ```
 
 ## Using the calendar
@@ -651,7 +663,7 @@ config is cleared with the session.
 sequenceDiagram
     autonumber
     actor User as Browser
-    participant View as CalendarView
+    participant View as ChronoGrid
     participant Svc as CalendarService
     participant Cli as CalDavClient
     participant Srv as iCloud / Radicale / testbench
@@ -695,16 +707,16 @@ sequenceDiagram
 
 The repository is a Maven reactor with three modules — two
 publishable Vaadin add-ons plus the consuming demo. The split lets
-a headless CLI or sync job pull only `calendar-caldav` without
+a headless CLI or sync job pull only `chronogrid-core` without
 dragging the Vaadin runtime along. See
-[`docs/CALENDAR_COMPONENT_EXTRACTION.md`](docs/CALENDAR_COMPONENT_EXTRACTION.md)
+[`docs/CHRONOGRID_EXTRACTION.md`](docs/CHRONOGRID_EXTRACTION.md)
 for the design rationale and journey.
 
 ```
-caldav-demo-reactor                  (pom — reactor root)
+chronogrid-demo-reactor                  (pom — reactor root)
 │
-├── calendar-caldav                  (jar — headless wire + service)
-│   └── com.svenruppert.vaadin.calendar
+├── chronogrid-core                  (jar — headless wire + service)
+│   └── com.svenruppert.chronogrid
 │       ├── client/                  CalDavClient    PUT/GET/DELETE/REPORT, XXE-hardened
 │       │                            CalDavDiscovery three-step PROPFIND
 │       │                            CalDavError(s)  classified failure types
@@ -715,17 +727,17 @@ caldav-demo-reactor                  (pom — reactor root)
 │       │                            CalendarSubscription   · CalDavProviderPreset
 │       ├── state/                   CalendarStateStore  interface (UI-agnostic)
 │       └── i18n/                    CalendarMessages    functional interface
-│   → see calendar-caldav/README.md for consumer-side docs
+│   → see chronogrid-core/README.md for consumer-side docs
 │
-├── calendar-component               (jar — Vaadin Flow add-on)
-│   └── com.svenruppert.vaadin.calendar
-│       ├── ui/                      CalendarView    + 6 sub-components
+├── chronogrid               (jar — Vaadin Flow add-on)
+│   └── com.svenruppert.chronogrid
+│       ├── ui/                      ChronoGrid    + 6 sub-components
 │       │                            (CalendarNavigationBar, ConnectionStatusBadge,
 │       │                             ConnectionsDialog, EventEditorDialog,
 │       │                             ServerStatusList, SubscriptionsDialog)
 │       └── state/                   VaadinSessionCalendarStateStore  (default impl)
-│   resources/META-INF/resources/frontend/styles/calendar-view.css
-│   → see calendar-component/README.md for consumer-side docs
+│   resources/META-INF/resources/frontend/styles/chronogrid.css
+│   → see chronogrid/README.md for consumer-side docs
 │
 └── demo                             (war — the consuming application)
     └── com.svenruppert.flow
@@ -735,10 +747,10 @@ caldav-demo-reactor                  (pom — reactor root)
         ├── i18n/                    AppI18NProvider + I18nSupport host adapter
         └── views/
             ├── CalendarRouteView    @Route("calendar") + @VisibleFor(USER)
-            │                        — embeds new CalendarView(store, messages)
+            │                        — embeds new ChronoGrid(store, messages)
             └── …                    AppLogin, Dashboard, About, …
 
-calendar-caldav/src/test/java/junit/com/svenruppert/vaadin/calendar/
+chronogrid-core/src/test/java/junit/com/svenruppert/vaadin/calendar/
 ├── CalDavDevServer.java             long-running dev launcher (Main class)
 ├── EntryMapperTest.java             VEVENT roundtrip
 ├── CalDavClientIT.java              PUT/GET/DELETE/REPORT vs. testbench
@@ -750,11 +762,11 @@ calendar-caldav/src/test/java/junit/com/svenruppert/vaadin/calendar/
 ├── state/CalendarStateStoreTest.java       contract round-trip
 └── i18n/CalendarMessagesTest.java          host-i18n seam
 
-calendar-component/src/test/java/junit/com/svenruppert/vaadin/calendar/state/
+chronogrid/src/test/java/junit/com/svenruppert/vaadin/calendar/state/
 └── VaadinSessionCalendarStateStoreTest.java   no-session fallback
 
-demo/src/test/java/junit/com/svenruppert/vaadin/calendar/
-└── CalendarViewBrowserlessTest.java   route gating + EntryProvider + status badge
+chronogrid-chronogrid-demo/src/test/java/junit/com/svenruppert/vaadin/calendar/
+└── ChronoGridBrowserlessTest.java   route gating + EntryProvider + status badge
 
 start-caldav-dev-server.sh           project-root wrapper for the CalDAV testbench launcher
 start-vaadin-demo.sh                 project-root wrapper for CalDavDemo (Vaadin side)
@@ -806,7 +818,7 @@ free; if you want a non-calendar starter, fork that repo directly.
 | Audit log | Ring buffer + persistent sink, live `/audit` grid | `views/AuditView` |
 | Session admin | Active-session inventory, revoke-on-click | `views/SessionsView` |
 | Role admin | Add/remove users + roles, version-bump-on-mutation | `views/AdminRolesView` |
-| Mutation tests | PIT + Browserless, per-package coverage floors enforced in CI | `tools/`, `demo/src/test/.../*BrowserlessTest.java` |
+| Mutation tests | PIT + Browserless, per-package coverage floors enforced in CI | `tools/`, `chronogrid-chronogrid-demo/src/test/.../*BrowserlessTest.java` |
 | Design system | `TemplateBrand` + theme tokens + reusable components | `views/ui/`, `frontend/themes/my-theme/styles.css` |
 | Push demo | Vaadin `@Push` example view | `views/main/PushDemoView` |
 
@@ -852,10 +864,10 @@ the feature stabilises, baseline them in `tools/pit-baselines.txt`.
 
 ### Rebranding a fork (30 minutes)
 
-1. **`demo/src/main/java/com/svenruppert/flow/views/ui/TemplateBrand.java`**
+1. **`chronogrid-chronogrid-demo/src/main/java/com/svenruppert/flow/views/ui/TemplateBrand.java`**
    — change `NAME`, `TAGLINE`, `LANDING_INTRO`, `ICON`. The wordmark,
    navbar, hero copy and document title all pull from here.
-2. **`demo/src/main/frontend/themes/my-theme/styles.css`** — change the
+2. **`chronogrid-chronogrid-demo/src/main/frontend/themes/my-theme/styles.css`** — change the
    six `--app-brand-*` hex values at the top. Lumo's
    `--lumo-primary-*` is mapped to it, so the entire app retheme
    follows.

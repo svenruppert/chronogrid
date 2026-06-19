@@ -41,11 +41,11 @@ build/
 /src/main/frontend/generated/
 /src/main/bundles/
 /node_modules/
-demo/src/main/frontend/generated/
-demo/src/main/bundles/
-demo/node_modules/
+chronogrid-demo/src/main/frontend/generated/
+chronogrid-demo/src/main/bundles/
+chronogrid-demo/node_modules/
 
 ### jSentinel persistence — Eclipse-Store data dir, bootstrap token ###
 /data/
 /Appl-iCloud-Password.txt
-/demo/data/
+/chronogrid-demo/data/

@@ -83,7 +83,7 @@ Pro-Termin-Farbe + Kalender-Streifen bekommt der Nutzer **beides**:
   CSS-only Ansatz via Custom-Property:
   - Inline-Hook am gerenderten Eintragselement: `--entry-stripe-color`
     aus `caldavCalendarColor`.
-  - Statische CSS-Regel in `styles/calendar-view.css`:
+  - Statische CSS-Regel in `styles/chronogrid.css`:
     ```css
     .fc-event {
       border-left: 4px solid var(--entry-stripe-color, transparent);
