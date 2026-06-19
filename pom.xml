@@ -6,7 +6,7 @@
 
     <groupId>com.svenruppert</groupId>
     <artifactId>caldav-demo-reactor</artifactId>
-    <version>00.10.00</version>
+    <version>00.10.01-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Calendar / CalDAV Demo — Reactor</name>

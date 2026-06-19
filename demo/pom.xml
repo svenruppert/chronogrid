@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>caldav-demo</artifactId>
-    <version>00.10.00</version>
+    <version>00.10.01-SNAPSHOT</version>
     <packaging>war</packaging>
 
 
@@ -165,7 +165,7 @@
         <dependency>
             <groupId>com.svenruppert.vaadin.calendar</groupId>
             <artifactId>calendar-component</artifactId>
-            <version>00.10.00</version>
+            <version>00.10.01-SNAPSHOT</version>
         </dependency>
 
         <dependency>
