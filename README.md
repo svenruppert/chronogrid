@@ -787,14 +787,20 @@ implemented:
   the in-app Settings dialog). Bearer / OAuth2 token flows would
   need their own header injection in `CalDavClient.baseRequest(...)`
   and an OIDC-aware login.
-- **TZID / VTIMEZONE handling.** `EntryMapper` uses the configured
-  display zone for both directions. RRULE expansion is delegated to
-  the server side (the testbench handles it).
-- **Server discovery.** No `.well-known/caldav` /
-  `current-user-principal` / `calendar-home-set` probing — the
-  collection URI is configured via `-Dapp.caldav.baseUri=…`.
 - **MKCALENDAR.** Collections must exist server-side; the client
   does not create them.
+- **RRULE expansion.** Recurring events are pushed to the server as
+  a single VEVENT with RRULE; expansion into individual occurrences
+  is delegated to the server side (the testbench handles it, iCloud
+  expands on the wire when REPORTed). `EntryMapper` does not
+  enumerate occurrences on the client.
+
+> **Implemented since the v00.10.00 concept doc was written**:
+> TZID / VTIMEZONE round-trip (`EntryMapper` preserves the source
+> zone — see `EntryMapperTimezoneTest`); server discovery via the
+> three-step PROPFIND chain (`CalDavDiscovery`, with `<C:calendar-
+> home-set>` + `<DAV:current-user-principal>`); per-subscription
+> colour picker; multi-server / multi-subscription fan-out.
 
 ---
 
