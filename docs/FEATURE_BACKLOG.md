@@ -17,7 +17,7 @@ Jeder Eintrag folgt dem Schema:
 
 ## #1 — Pro-Termin-Farbe mit Kalender-Farbstreifen am Rand
 
-**Status:** offen
+**Status:** ✅ shipped 2026-06-20 in `456c886` (see commit body for the implementation map)
 **Aufgenommen:** 2026-06-17
 
 ### Idee
