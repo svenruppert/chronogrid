@@ -45,6 +45,7 @@ import com.svenruppert.chronogrid.client.RemoteEvent;
 import com.svenruppert.chronogrid.mapping.EntryMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import org.vaadin.stefan.fullcalendar.Entry;
 
 import java.net.URI;
@@ -177,5 +178,45 @@ class EntryMapperTest {
     String written = mapper.toICalendarText(entry);
     assertTrue(written.contains("LOCATION:Café am Park"));
     assertTrue(written.contains("URL:https://example.com/coffee"));
+  }
+
+  @Test
+  @DisplayName("VEVENT COLOR (RFC 7986) round-trips through CUSTOM_ENTRY_COLOR")
+  void colorRoundtrip() {
+    String ical = """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        PRODID:-//flow-template//test//EN
+        BEGIN:VEVENT
+        UID:color-1
+        SUMMARY:Painted event
+        COLOR:#FFAA00
+        DTSTART:20260614T100000Z
+        DTEND:20260614T110000Z
+        END:VEVENT
+        END:VCALENDAR
+        """;
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = mapper.toEntry(new RemoteEvent(
+        URI.create("http://host/cal/color.ics"), "\"e1\"", ical));
+
+    assertEquals("#FFAA00",
+        entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
+        "VEVENT COLOR must land on CUSTOM_ENTRY_COLOR for the UI to read");
+
+    String written = mapper.toICalendarText(entry);
+    assertTrue(written.contains("COLOR:#FFAA00"),
+        "Entry with CUSTOM_ENTRY_COLOR set must serialise COLOR back into iCalendar");
+  }
+
+  @Test
+  @DisplayName("VEVENT without COLOR yields a null CUSTOM_ENTRY_COLOR")
+  void noColorYieldsNull() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = mapper.toEntry(new RemoteEvent(
+        URI.create("http://host/cal/event.ics"), "\"e1\"", SAMPLE_ICAL));
+
+    assertNull(entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
+        "An entry parsed from a VEVENT without COLOR must NOT carry CUSTOM_ENTRY_COLOR");
   }
 }

@@ -25,10 +25,12 @@ import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.Composite;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
+import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.datetimepicker.DateTimePicker;
 import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.Span;
+import com.vaadin.flow.dom.Element;
 import com.vaadin.flow.component.orderedlayout.FlexComponent;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
@@ -71,6 +73,10 @@ public final class EventEditorDialog
   private static final String K_FIELD_DESCRIPTION = "calendar.field.description";
   private static final String K_FIELD_LOCATION = "calendar.field.location";
   private static final String K_FIELD_URL = "calendar.field.url";
+  private static final String K_FIELD_COLOR = "calendar.field.color";
+  private static final String K_FIELD_COLOR_USE = "calendar.field.color.use";
+  private static final String K_FIELD_COLOR_RESET = "calendar.field.color.reset";
+  private static final String K_FIELD_COLOR_HINT = "calendar.field.color.hint";
   private static final String K_FIELD_START = "calendar.field.start";
   private static final String K_FIELD_END = "calendar.field.end";
   private static final String K_FIELD_CALENDAR = "calendar.field.calendar";
@@ -176,12 +182,39 @@ public final class EventEditorDialog
     DateTimePicker end = new DateTimePicker(messages.tr(K_FIELD_END, "End"));
     end.setValue(entry.getEnd());
 
+    // Per-entry colour controls. The user can opt in to overriding
+    // the calendar's default colour; the calendar colour stays on the
+    // entry's border so the multi-calendar provenance is preserved
+    // even when fill colours collide.
+    String storedEntryColor = entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR);
+    Checkbox colourEnabled =
+        new Checkbox(messages.tr(K_FIELD_COLOR_USE, "Use custom colour"));
+    colourEnabled.setValue(storedEntryColor != null && !storedEntryColor.isBlank());
+    Element colourPicker = new Element("input");
+    colourPicker.setAttribute("type", "color");
+    colourPicker.setAttribute("title", messages.tr(K_FIELD_COLOR, "Colour"));
+    colourPicker.setProperty("value",
+        storedEntryColor != null && !storedEntryColor.isBlank()
+            ? normaliseColor(storedEntryColor) : "#1f77b4");
+    colourPicker.getClassList().add("chronogrid-color-picker");
+    Div pickerHost = new Div();
+    pickerHost.getElement().appendChild(colourPicker);
+    Span colourHint = new Span(messages.tr(K_FIELD_COLOR_HINT,
+        "When off, the event takes its colour from its calendar. "
+            + "When on, the chosen colour fills the event; the "
+            + "calendar's colour stays on the event's border."));
+    colourHint.addClassName("chronogrid-secondary-text");
+    HorizontalLayout colourRow = new HorizontalLayout(colourEnabled, pickerHost);
+    colourRow.setAlignItems(FlexComponent.Alignment.CENTER);
+    Div colourBlock = new Div(colourRow, colourHint);
+    colourBlock.getStyle().set("width", "100%");
+
     VerticalLayout form = new VerticalLayout();
     form.setPadding(false);
     form.setSpacing(true);
     if (serverFilter != null) form.add(serverFilter);
     if (calendarSelect != null) form.add(calendarSelect);
-    form.add(title, description, location, url, start, end);
+    form.add(title, description, location, url, start, end, colourBlock);
     dialog.add(form);
 
     final Select<CalendarSubscription> calendarSelectFinal = calendarSelect;
@@ -190,6 +223,13 @@ public final class EventEditorDialog
       entry.setDescription(description.getValue());
       entry.setCustomProperty(EntryMapper.CUSTOM_LOCATION, location.getValue());
       entry.setCustomProperty(EntryMapper.CUSTOM_URL, url.getValue());
+      if (Boolean.TRUE.equals(colourEnabled.getValue())) {
+        String pickedColor = colourPicker.getProperty("value");
+        entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR,
+            pickedColor == null || pickedColor.isBlank() ? null : pickedColor);
+      } else {
+        entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, null);
+      }
       if (start.getValue() != null) entry.setStart(start.getValue());
       if (end.getValue() != null) entry.setEnd(end.getValue());
       URI target = calendarSelectFinal != null && calendarSelectFinal.getValue() != null
@@ -316,5 +356,24 @@ public final class EventEditorDialog
 
   public Dialog dialog() {
     return getContent();
+  }
+
+  /**
+   * Coerce a stored colour value to the 7-char {@code "#rrggbb"} shape
+   * the HTML5 {@code <input type="color">} accepts. CalDAV servers can
+   * emit RFC 7986 {@code COLOR} as a CSS3 colour name ({@code "azure"})
+   * or as the 9-char {@code "#rrggbbaa"} variant; both need trimming
+   * before they're round-trippable through the picker.
+   */
+  private static String normaliseColor(String raw) {
+    if (raw == null || raw.isBlank()) return "#1f77b4";
+    String trimmed = raw.trim();
+    if (trimmed.startsWith("#") && trimmed.length() == 9) {
+      return trimmed.substring(0, 7);
+    }
+    if (trimmed.startsWith("#") && trimmed.length() == 7) {
+      return trimmed;
+    }
+    return "#1f77b4";
   }
 }

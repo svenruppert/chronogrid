@@ -85,6 +85,14 @@ public final class CalendarService implements HasLogger {
       "#9467BD", "#8C564B", "#E377C2", "#7F7F7F"
   };
 
+  /**
+   * The owning calendar's colour, stamped on every Entry during
+   * {@link #fanOut} so the renderer can paint a provenance border /
+   * stripe even when the entry carries its own user-set fill colour
+   * (see {@link EntryMapper#CUSTOM_ENTRY_COLOR}).
+   */
+  public static final String CUSTOM_CALENDAR_COLOR = "caldavCalendarColor";
+
   private final CalDavClient primary;
   private final List<CalDavClient> readClients;
   private final EntryMapper mapper;
@@ -186,12 +194,12 @@ public final class CalendarService implements HasLogger {
     int total = 0;
     for (int i = 0; i < readClients.size(); i++) {
       CalDavClient client = readClients.get(i);
-      String color = PALETTE[Math.floorMod(client.collectionUri().hashCode(),
+      String calendarColor = PALETTE[Math.floorMod(client.collectionUri().hashCode(),
           PALETTE.length)];
       int perClient = 0;
       for (RemoteEvent remote : op.apply(client)) {
         Entry entry = mapper.toEntry(remote);
-        if (entry.getColor() == null) entry.setColor(color);
+        applyColours(entry, calendarColor);
         all.accept(entry);
         perClient++;
       }
@@ -200,6 +208,31 @@ public final class CalendarService implements HasLogger {
     logger().info("fanOut across {} client(s) produced {} entries total",
         readClients.size(), total);
     return all.build();
+  }
+
+  /**
+   * Colour-stamp an entry with its owning calendar's colour for
+   * provenance plus, if the user has set an individual VEVENT
+   * COLOR property, paint the fill in that user colour while the
+   * border keeps the calendar colour (Google-Calendar-style:
+   * fill = own colour, border = calendar source).
+   *
+   * <p>The {@link #CUSTOM_CALENDAR_COLOR} custom property always
+   * carries the calendar colour after this method so downstream
+   * renderers (CSS hooks) can read it independently of FullCalendar's
+   * own border/background slots.
+   */
+  public static void applyColours(Entry entry, String calendarColor) {
+    entry.setCustomProperty(CUSTOM_CALENDAR_COLOR, calendarColor);
+    String individualColor = entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR);
+    if (individualColor != null && !individualColor.isBlank()) {
+      entry.setBackgroundColor(individualColor);
+      entry.setBorderColor(calendarColor);
+    } else {
+      // No user-set colour: fall back to the calendar colour for both
+      // (uniform look — same as the pre-v01.00.00 behaviour).
+      entry.setColor(calendarColor);
+    }
   }
 
   public Optional<Entry> findById(String uid) {

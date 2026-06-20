@@ -88,6 +88,20 @@ public final class EntryMapper {
   public static final String KIND_VTODO = "vtodo";
   public static final String CUSTOM_TODO_STATUS = "caldavTodoStatus";
 
+  /**
+   * User-set per-entry colour (RFC 7986 VEVENT COLOR property).
+   * Stamped during {@link #toEntry} when the source VEVENT carries
+   * a {@code COLOR} property; written back during
+   * {@link #toICalendarText} when set.
+   *
+   * <p>This is the <em>individual</em> colour. The view's
+   * {@code CalendarService.fanOut} pairs it with the surrounding
+   * calendar's colour (set on the entry via
+   * {@link com.svenruppert.chronogrid.service.CalendarService#CUSTOM_CALENDAR_COLOR})
+   * so the renderer can show entry-fill + calendar-border at once.
+   */
+  public static final String CUSTOM_ENTRY_COLOR = "caldavEntryColor";
+
   private final ZoneId displayZone;
 
   public EntryMapper() {
@@ -141,6 +155,9 @@ public final class EntryMapper {
     Optional.ofNullable(vevent.getUrl()).map(u -> u.getValue())
         .filter(s -> !s.isBlank())
         .ifPresent(s -> entry.setCustomProperty(CUSTOM_URL, s));
+    Optional.ofNullable(vevent.getColor()).map(c -> c.getValue())
+        .filter(s -> !s.isBlank())
+        .ifPresent(s -> entry.setCustomProperty(CUSTOM_ENTRY_COLOR, s));
 
     entry.setCustomProperty(CUSTOM_KIND, KIND_VEVENT);
     entry.setCustomProperty(CUSTOM_ETAG, remote.etag());
@@ -260,6 +277,8 @@ public final class EntryMapper {
     if (location != null && !location.isBlank()) vevent.setLocation(location);
     String url = entry.getCustomProperty(CUSTOM_URL);
     if (url != null && !url.isBlank()) vevent.setUrl(url);
+    String entryColor = entry.getCustomProperty(CUSTOM_ENTRY_COLOR);
+    if (entryColor != null && !entryColor.isBlank()) vevent.setColor(entryColor);
 
     boolean allDay = Boolean.TRUE.equals(entry.isAllDay());
     String tzid = entry.getCustomProperty(CUSTOM_TZID);
