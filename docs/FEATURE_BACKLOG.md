@@ -468,34 +468,47 @@ contribute to every day they span, with the FullCalendar
 and triggers it on every `opened-changed`/`value-change` of the
 `DatePicker`. The result is serialised to JSON
 (`{"2026-06-15":["#1f77b4","#ff7f0e"], …}`) and pushed to the
-picker element together with a tiny shadow-DOM walker via
-`executeJs`:
+picker element together with a shadow-DOM walker via `executeJs`.
 
-```js
-// Walk picker._overlayContent.shadowRoot → vaadin-month-calendar.shadowRoot
-// → [part~="date"]. For each cell whose date is in the pushed map,
-// stamp data-cg-events="N" + --cg-day-color-1/-2/-3.
-// A MutationObserver on the overlay re-paints when the user
-// navigates months inside the popover (◀/▶).
-```
+The walker — validated against Vaadin 25.1.1 — does five things:
 
-CSS in `chronogrid.css` paints a 20×4 px bar under the day number,
-split into 1 / 2 / 3 colour segments via `linear-gradient`:
+1. **Find the month calendars** via a document-wide
+   `querySelectorAll('vaadin-month-calendar')`. Vaadin teleports
+   the popover to `document.body`, so the calendars are reachable
+   document-globally once the overlay has mounted. A recursive
+   shadow-tree walk from `document.body` catches any case where
+   the overlay nests them under custom scroller wrappers.
+2. **Race-resilient mount.** First open often runs before the
+   overlay has finished mounting; `paintWithRetry` polls every
+   60 ms (max 10×) until at least one cell is found.
+3. **Inject a `<style data-cg="1">`** into each month-calendar's
+   shadow root, exactly once. The stylesheet lives in the same
+   shadow scope as the cells, so its selectors match without
+   needing `::part()` (which only pierces one shadow boundary,
+   so document-level rules can't reach the cells two hops deep).
+4. **Per cell**: set `data-cg-events="N"` plus a custom property
+   `--cg-day-bg` — either a single colour or a 2-/3-stop
+   `linear-gradient`. The injected stylesheet renders the bar via
+   an `::after` pseudo-element which Vaadin's own td-background
+   rules cannot fight on specificity (it's a brand-new box).
+5. **Recursive MutationObservers** on every reachable shadow root
+   (one observer doesn't cross boundaries) so user navigation
+   inside the popover — month scrolling, year picking — triggers
+   automatic re-paints.
+
+The injected stylesheet:
 
 ```css
-vaadin-month-calendar::part(date)[data-cg-events]::after {
+[data-cg-events]            { position: relative; }
+[data-cg-events]::after {
     content: "";
-    position: absolute; left: 50%; bottom: 4px;
+    position: absolute; left: 50%; bottom: 2px;
     transform: translateX(-50%);
-    width: 20px; height: 4px; border-radius: 999px;
-    background: var(--lumo-primary-color);
+    width: 60%; max-width: 24px; height: 4px;
+    border-radius: 2px;
+    background: var(--cg-day-bg, currentColor);
+    pointer-events: none;
 }
-vaadin-month-calendar::part(date)[data-cg-events="2"]::after {
-    background: linear-gradient(to right,
-        var(--cg-day-color-1) 0% 50%,
-        var(--cg-day-color-2) 50% 100%);
-}
-/* …and a 3-third gradient for data-cg-events="3" */
 ```
 
 Days with 4+ contributing calendars cap at the 3-third gradient
@@ -504,13 +517,16 @@ counter).
 
 ### Acceptance signals
 
-- ✅ Opening the popover paints a bar under every day cell that
-  has at least one entry within the visible month-±1 window.
-- ✅ Navigating months inside the popover (the popover's own
-  ◀/▶ buttons) re-paints — `MutationObserver` on the overlay
-  catches Vaadin's cell-reuse and re-runs the walker.
+- ✅ Opening the popover paints a ~24 px × 4 px rounded bar at the
+  bottom of every day cell that has at least one entry within the
+  visible month-±1 window. Verified visually against a populated
+  iCloud calendar.
+- ✅ Scrolling months inside the popover re-paints via the
+  recursive MutationObserver chain — newly mounted month cells
+  get their bars without a manual re-trigger.
 - ✅ Days with 1 / 2 / 3 contributing calendars render a solid /
-  half-split / third-split bar in the source colours.
+  half-split / third-split bar in the source colours via a
+  `linear-gradient` on the `--cg-day-bg` custom property.
 - ✅ Days with 4+ contributing calendars render the 3-third bar
   (capped, no extra overflow indicator).
 - ✅ Empty days render no bar.
@@ -522,29 +538,52 @@ counter).
 
 ### Open history note
 
-The very first version of this entry (committed on the same day
-as the corrected version) shipped a *different* solution: an
-indicator badge **next to** the date picker, updated on
-value-change, showing the count and dots for the currently-focused
-date. That version misread the request — Sven's intent was a
-visual signal **inside the dropdown calendar cells**, not adjacent
-to the picker, so a busy week stands out at a glance during
-date-search. The corrected version landed the same day, replacing
-the adjacent-badge code (removed CSS class
-`.chronogrid-nav__day-hint*` + dayHint i18n keys) with the
-shadow-DOM walker described above. Recorded here open so the
-reasoning is traceable for the next reader.
+This entry went through three iterations on the day it shipped:
+
+1. **Adjacent-badge misread.** First version landed an indicator
+   badge *next to* the date picker showing count + dots for the
+   selected date. Wrong scope — Sven's intent was an in-cell signal
+   inside the popover so a busy week stands out at a glance during
+   date-search. Rolled back same-day.
+2. **Shadow-DOM walker, first attempt.** Walked
+   `picker._overlayContent.shadowRoot →
+   vaadin-month-calendar.shadowRoot → [part~="date"]`, set inline
+   `background-image: linear-gradient(...) !important` on the cells.
+   Two problems: (a) Vaadin 25.1.1 mounts the overlay outside the
+   picker's shadow tree (teleports to `document.body`), so the
+   `_overlayContent` traversal path returned zero month calendars;
+   (b) even where cells were reachable, Vaadin's own td-background
+   rules in the constructed-stylesheet won the specificity battle
+   despite `!important`.
+3. **Stylesheet-injection, final.** Document-wide `querySelectorAll`
+   to find the calendars, polling retry for the overlay-mount race,
+   and a `<style>` element injected into each month-calendar's
+   shadow root so the `::after` bar is a brand-new box Vaadin's
+   own rules can't fight. Validated visually against a populated
+   iCloud calendar (4 days with entries, all painting correctly).
+
+Recorded open so the next reader sees the failure modes — the
+Vaadin date-picker shadow-DOM access pattern is brittle in a
+specific way (one-hop ::part(), teleported overlay, virtual scroll)
+and the working pattern documented above is the result of
+iterating on each of those.
 
 ### Risks / open questions
 
-- **Vaadin shadow-DOM contract.** The walker reaches
-  `picker._overlayContent.shadowRoot → vaadin-month-calendar
-  .shadowRoot → [part~="date"]`. This works against Vaadin 25.1.1
-  but a future Vaadin minor that renames the part name or hides
-  the overlay-content shadow root would silently drop the dots
-  (no Java exception, just no paint). Pin a smoke-test of this
-  feature into the upgrade checklist whenever Vaadin's
-  `vaadin.version` property is bumped.
+- **Vaadin shadow-DOM contract.** The walker depends on three
+  things being stable: (a) the overlay being reachable via
+  document-wide `querySelectorAll('vaadin-month-calendar')`,
+  (b) each month-calendar having an open shadow root we can
+  append a `<style>` to, (c) day cells matching one of
+  `[part~="date"]` / `#days-container td` / `#monthGrid tbody td`.
+  A future Vaadin minor that renames these would silently drop
+  the bars (no Java exception, no test failure, just no paint).
+  Pin a smoke-test of this feature into the upgrade checklist
+  whenever Vaadin's `vaadin.version` property is bumped — the
+  diagnostic `data-cg-dots-days` attribute on the picker element
+  reveals at a glance whether the Java side is providing data;
+  combine with DevTools-Elements inspection of a month-calendar
+  to verify cells are being stamped.
 - **Aggregator hits the CalDAV server.** Each popover-open
   triggers one `findInRange` for ~60 days. The underlying client
   typically reads from its in-process cache; if cold, a network

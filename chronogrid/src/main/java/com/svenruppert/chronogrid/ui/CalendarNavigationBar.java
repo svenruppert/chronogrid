@@ -354,6 +354,12 @@ public final class CalendarNavigationBar
     String json = serialiseDayDots(coloursByDay);
     Element el = datePicker.getElement();
     el.setProperty("__cgDayDotsPayload", json);
+    // Mirror the payload as an attribute so the DevTools Elements
+    // panel surfaces it without having to break into the JS heap —
+    // diagnostic only, the walker reads the property.
+    // Diagnostic: surface the count as an attribute so DevTools'
+    // Elements panel shows the data-shape without breaking into JS.
+    el.setAttribute("data-cg-dots-days", String.valueOf(coloursByDay.size()));
     el.executeJs(POPOVER_WALKER_JS);
   }
 
@@ -403,69 +409,220 @@ public final class CalendarNavigationBar
 
   /**
    * In-popover walker. Runs against {@code this} = the
-   * {@code <vaadin-date-picker>} element on every push. Idempotent
-   * — repeated runs install at most one MutationObserver, and
-   * repeated paints just rewrite the same {@code data-cg-events}
-   * attributes.
+   * {@code <vaadin-date-picker>} element on every push.
    *
-   * <p>Walks two shadow-DOM hops:
-   * {@code picker._overlayContent.shadowRoot → vaadin-month-calendar.shadowRoot}
-   * and stamps {@code data-cg-events="N"} + {@code --cg-day-colors:
-   * c1 c2 c3} on each {@code [part~="date"]} cell whose ISO date is
-   * in the pushed map. CSS in {@code chronogrid.css} renders the
-   * dots from the custom property.
+   * <p>Architecture (validated against Vaadin 25.1.1):
+   * <ul>
+   *   <li>Vaadin teleports the popover to {@code document.body},
+   *       so {@code <vaadin-month-calendar>} instances are
+   *       reachable via a document-wide {@code querySelectorAll}
+   *       once the overlay has mounted. A recursive shadow-tree
+   *       walk from {@code document.body} catches any case where
+   *       the overlay nests them under custom scroller wrappers.</li>
+   *   <li>The first popover-open often races the overlay mount —
+   *       {@code paintWithRetry} polls every 60 ms (up to 10×)
+   *       until at least one cell is found, then stops.</li>
+   *   <li>Day cells are {@code [part~="date"]} {@code <td>}
+   *       elements inside {@code <table id="monthGrid">
+   *       <tbody id="days-container">} (confirmed via DevTools
+   *       inspection on Vaadin 25.1.1). Fallback selectors
+   *       {@code #days-container td} and {@code #monthGrid tbody
+   *       td} guard against minor-version changes.</li>
+   *   <li>Visual rendering: a {@code <style data-cg="1">} element
+   *       is injected once into each {@code <vaadin-month-calendar>}'s
+   *       shadow root. The stylesheet lives in the same shadow
+   *       scope as the cells, so its selectors match without
+   *       {@code ::part()} gymnastics. The bar is a
+   *       {@code ::after} pseudo — a brand-new box that Vaadin's
+   *       own td-background rules can't fight on specificity.</li>
+   *   <li>Per cell we set only {@code data-cg-events="N"} as an
+   *       attribute and a custom property {@code --cg-day-bg}
+   *       (either a single colour or a 2-/3-stop {@code linear-
+   *       gradient}). The injected stylesheet reads
+   *       {@code --cg-day-bg} from the cell and paints the bar.</li>
+   *   <li>MutationObservers are installed recursively on every
+   *       reachable shadow root (a single observer doesn't cross
+   *       boundaries) so user navigation inside the popover —
+   *       month scrolling, year picking — triggers re-paints
+   *       automatically.</li>
+   * </ul>
    *
-   * <p>The MutationObserver re-paints on month navigation inside
-   * the popover — needed because the cells are reused across
-   * months and Vaadin re-writes their {@code part} content without
-   * notifying us.
+   * <p>Diagnostics: every key step logs at {@code console.debug}
+   * level under the {@code [chronogrid:#5]} prefix; enable the
+   * "Verbose" log filter in DevTools to see them. The picker
+   * element also carries {@code data-cg-dots-days="N"} so the
+   * data shape is visible in the Elements panel without breaking
+   * into JS.
    */
   private static final String POPOVER_WALKER_JS =
       "const picker=this;\n"
+    + "const TAG='[chronogrid:#5]';\n"
     + "const raw=picker.__cgDayDotsPayload||'{}';\n"
-    + "let map={};try{map=JSON.parse(raw);}catch(e){map={};}\n"
+    + "let map={};\n"
+    + "try{map=JSON.parse(raw);}catch(e){console.warn(TAG,'JSON parse failed',e);map={};}\n"
+    + "console.debug(TAG,'push',Object.keys(map).length,'days');\n"
+    // pad helper
+    + "function pad(n){return String(n).padStart(2,'0');}\n"
+    + "function isoFor(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}\n"
+    // ── extract date from a cell, multiple paths
+    + "function dateOf(cell){\n"
+    + "  if(cell.date instanceof Date) return cell.date;\n"
+    + "  if(cell._date instanceof Date) return cell._date;\n"
+    // host-month fallback: the <vaadin-month-calendar> exposes `.month`
+    + "  const root=cell.getRootNode();\n"
+    + "  const host=root && root.host;\n"
+    + "  if(host && host.month instanceof Date){\n"
+    + "    const dayNum=parseInt((cell.textContent||'').trim(),10);\n"
+    + "    if(!isNaN(dayNum) && dayNum>=1 && dayNum<=31){\n"
+    + "      return new Date(host.month.getFullYear(),host.month.getMonth(),dayNum);\n"
+    + "    }\n"
+    + "  }\n"
+    + "  return null;\n"
+    + "}\n"
+    // ── stylesheet injected into every <vaadin-month-calendar>
+    //     shadow root. Lives in the same shadow scope as the day
+    //     cells, so its selectors match cleanly without any
+    //     ::part() / specificity gymnastics. The ::after pseudo is
+    //     a brand-new box that Vaadin's own td styles cannot fight.
+    + "const CG_STYLE_TEXT=\n"
+    + "  '[data-cg-events]{position:relative}'+\n"
+    + "  '[data-cg-events]::after{'+\n"
+    + "    'content:\"\";'+\n"
+    + "    'position:absolute;left:50%;bottom:2px;'+\n"
+    + "    'transform:translateX(-50%);'+\n"
+    + "    'width:60%;max-width:24px;height:4px;'+\n"
+    + "    'border-radius:2px;'+\n"
+    + "    'background:var(--cg-day-bg,currentColor);'+\n"
+    + "    'pointer-events:none;'+\n"
+    + "  '}';\n"
+    + "function ensureStyle(mc){\n"
+    + "  const r=mc.shadowRoot;\n"
+    + "  if(!r||r.querySelector('style[data-cg]'))return;\n"
+    + "  const s=document.createElement('style');\n"
+    + "  s.setAttribute('data-cg','1');\n"
+    + "  s.textContent=CG_STYLE_TEXT;\n"
+    + "  r.appendChild(s);\n"
+    + "}\n"
+    // ── paint a single cell with up to 3 colours
     + "function paint(cell){\n"
-    + "  const d=cell.date;\n"
-    + "  if(!(d instanceof Date)){return;}\n"
-    + "  const iso=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');\n"
+    + "  const d=dateOf(cell);\n"
+    + "  if(!d){return;}\n"
+    + "  const iso=isoFor(d);\n"
     + "  const cs=map[iso];\n"
     + "  if(cs && cs.length){\n"
-    + "    const n=Math.min(3,cs.length);\n"
-    + "    cell.setAttribute('data-cg-events',String(n));\n"
-    + "    cell.style.setProperty('--cg-day-color-1',cs[0]||'currentColor');\n"
-    + "    cell.style.setProperty('--cg-day-color-2',cs[1]||cs[0]||'currentColor');\n"
-    + "    cell.style.setProperty('--cg-day-color-3',cs[2]||cs[1]||cs[0]||'currentColor');\n"
-    + "  } else {\n"
+    + "    let bg;\n"
+    + "    if(cs.length===1){bg=cs[0];}\n"
+    + "    else if(cs.length===2){bg='linear-gradient(to right,'+cs[0]+' 0% 50%,'+cs[1]+' 50% 100%)';}\n"
+    + "    else{bg='linear-gradient(to right,'+cs[0]+' 0% 33.333%,'+cs[1]+' 33.333% 66.666%,'+cs[2]+' 66.666% 100%)';}\n"
+    + "    cell.style.setProperty('--cg-day-bg',bg);\n"
+    + "    cell.setAttribute('data-cg-events',String(Math.min(3,cs.length)));\n"
+    + "  } else if(cell.hasAttribute('data-cg-events')){\n"
+    + "    cell.style.removeProperty('--cg-day-bg');\n"
     + "    cell.removeAttribute('data-cg-events');\n"
-    + "    cell.style.removeProperty('--cg-day-color-1');\n"
-    + "    cell.style.removeProperty('--cg-day-color-2');\n"
-    + "    cell.style.removeProperty('--cg-day-color-3');\n"
     + "  }\n"
     + "}\n"
-    + "function paintCalendar(mc){\n"
-    + "  const root=mc.shadowRoot||mc;\n"
-    + "  const cells=root.querySelectorAll('[part~=\"date\"]');\n"
-    + "  cells.forEach(paint);\n"
+    // ── recursively collect every <vaadin-month-calendar> across
+    //     all shadow roots reachable from root. Critical: also
+    //     recurse into light-DOM children of elements with shadow
+    //     roots (slotted content) — a shallow shadowRoot+children
+    //     walker would miss vaadin-month-calendar instances mounted
+    //     as light-DOM under a scroller wrapper.
+    + "function collectMonths(root,acc){\n"
+    + "  acc=acc||[];\n"
+    + "  if(!root) return acc;\n"
+    + "  const shadowRoot=root.shadowRoot;\n"
+    + "  const lightRoot=root;\n"
+    + "  [shadowRoot,lightRoot.shadowRoot?null:lightRoot].forEach(r=>{\n"
+    + "    if(!r||!r.querySelectorAll) return;\n"
+    + "    r.querySelectorAll('vaadin-month-calendar').forEach(m=>{if(acc.indexOf(m)<0)acc.push(m);});\n"
+    + "  });\n"
+    + "  if(shadowRoot && shadowRoot.querySelectorAll){\n"
+    + "    shadowRoot.querySelectorAll('vaadin-month-calendar').forEach(m=>{if(acc.indexOf(m)<0)acc.push(m);});\n"
+    + "    shadowRoot.querySelectorAll('*').forEach(el=>collectMonths(el,acc));\n"
+    + "  }\n"
+    + "  if(lightRoot.children){\n"
+    + "    Array.from(lightRoot.children).forEach(el=>collectMonths(el,acc));\n"
+    + "  }\n"
+    + "  return acc;\n"
     + "}\n"
-    + "function paintAll(content){\n"
-    + "  const root=content.shadowRoot||content;\n"
-    + "  const cals=root.querySelectorAll('vaadin-month-calendar');\n"
-    + "  cals.forEach(paintCalendar);\n"
+    // ── tolerant cell collector — Vaadin 25.1.1's month-calendar
+    //     uses a <table id='monthGrid'><tbody id='days-container'>
+    //     structure (confirmed via DevTools inspection). Cells may
+    //     or may not carry part='date' depending on minor version;
+    //     fall back to plain td under #days-container.
+    + "function collectCells(mc){\n"
+    + "  const mr=mc.shadowRoot||mc;\n"
+    + "  if(!mr||!mr.querySelectorAll) return [];\n"
+    + "  let cells=mr.querySelectorAll('[part~=\"date\"]');\n"
+    + "  if(cells.length>0) return Array.from(cells);\n"
+    + "  cells=mr.querySelectorAll('#days-container td');\n"
+    + "  if(cells.length>0) return Array.from(cells);\n"
+    + "  cells=mr.querySelectorAll('#monthGrid tbody td');\n"
+    + "  return Array.from(cells);\n"
+    + "}\n"
+    // Document-wide search bypasses any overlay-content scoping
+    // issues — vaadin overlays can portal anywhere.
+    + "function paintAll(){\n"
+    + "  const docMonths=Array.from(document.querySelectorAll('vaadin-month-calendar'));\n"
+    + "  const recursed=collectMonths(document.body);\n"
+    + "  const seen=new Set(docMonths);\n"
+    + "  recursed.forEach(m=>seen.add(m));\n"
+    + "  const cals=Array.from(seen);\n"
+    + "  let cellsTotal=0,cellsPainted=0;\n"
+    + "  cals.forEach(mc=>{\n"
+    + "    ensureStyle(mc);\n"
+    + "    const cells=collectCells(mc);\n"
+    + "    cellsTotal+=cells.length;\n"
+    + "    cells.forEach(c=>{paint(c); if(c.hasAttribute('data-cg-events')) cellsPainted++;});\n"
+    + "  });\n"
+    + "  console.debug(TAG,'paintAll: calendars=',cals.length,'cells=',cellsTotal,'painted=',cellsPainted);\n"
+    + "  return {cals:cals.length,cells:cellsTotal,painted:cellsPainted};\n"
+    + "}\n"
+    // Polling retry: first popover-open often hits before the
+    // overlay finishes mounting. Up to 10 retries × 60 ms gives the
+    // month grids ~600 ms to materialise; stop early on success.
+    + "function paintWithRetry(retries){\n"
+    + "  const r=paintAll();\n"
+    + "  if(r.cells>0||retries<=0) return;\n"
+    + "  setTimeout(()=>paintWithRetry(retries-1),60);\n"
     + "}\n"
     + "function attach(content){\n"
-    + "  if(!content){return;}\n"
-    + "  paintAll(content);\n"
-    + "  if(content.__cgObserver){return;}\n"
-    + "  const obs=new MutationObserver(()=>paintAll(content));\n"
-    + "  const root=content.shadowRoot||content;\n"
-    + "  obs.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['part','date']});\n"
-    + "  content.__cgObserver=obs;\n"
+    + "  if(!content){console.warn(TAG,'no overlay content'); return;}\n"
+    + "  paintWithRetry(10);\n"
+    // ── recursively install observers on every reachable shadow
+    //     root so user-navigation re-paints work (MutationObserver
+    //     does NOT cross shadow boundaries — one per root needed).
+    + "  function installObs(node,depth){\n"
+    + "    if(!node||depth>6) return;\n"
+    + "    if(node.shadowRoot){\n"
+    + "      if(!node.__cgObs){\n"
+    + "        const o=new MutationObserver(()=>paintAll());\n"
+    + "        o.observe(node.shadowRoot,{subtree:true,childList:true,attributes:true,characterData:true});\n"
+    + "        node.__cgObs=o;\n"
+    + "      }\n"
+    + "      node.shadowRoot.querySelectorAll('*').forEach(el=>installObs(el,depth+1));\n"
+    + "    }\n"
+    + "    if(node.children) Array.from(node.children).forEach(el=>installObs(el,depth+1));\n"
+    + "  }\n"
+    + "  installObs(content,0);\n"
+    + "  console.debug(TAG,'MutationObservers installed');\n"
+    + "}\n"
+    + "function findOverlayContent(){\n"
+    // try the documented accessor first
+    + "  if(picker._overlayContent) return picker._overlayContent;\n"
+    // try via the overlay slot (vaadin 25 sometimes lazy-mounts)
+    + "  if(picker.$ && picker.$.overlay){\n"
+    + "    const oc=picker.$.overlay.querySelector('vaadin-date-picker-overlay-content');\n"
+    + "    if(oc) return oc;\n"
+    + "  }\n"
+    // last resort: document-wide query (popover is portal'd to body)
+    + "  return document.querySelector('vaadin-date-picker-overlay-content');\n"
     + "}\n"
     + "function waitForOverlay(retries){\n"
-    + "  const oc=picker._overlayContent;\n"
+    + "  const oc=findOverlayContent();\n"
     + "  if(oc){attach(oc);return;}\n"
-    + "  if(retries<=0){return;}\n"
+    + "  if(retries<=0){console.warn(TAG,'gave up waiting for overlay');return;}\n"
     + "  setTimeout(()=>waitForOverlay(retries-1),40);\n"
     + "}\n"
-    + "waitForOverlay(25);\n";
+    + "waitForOverlay(40);\n";
 }
