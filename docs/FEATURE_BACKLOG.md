@@ -208,3 +208,82 @@ without configuration.
   feedback complains, bump to `-20pct`.
 - **Locale edge case:** „today" is computed client-side relative to
   the user's time zone by FullCalendar — no server-timing risk.
+
+---
+
+## #3 — Today highlight in the date-picker popover
+
+**Status:** ✅ shipped 2026-06-21 (see the commit body for the full
+implementation map)
+**Filed:** 2026-06-21
+
+### Idea
+
+In the **„Zum Datum springen"** selector (the `DatePicker` to the
+right of the navigation group in `CalendarNavigationBar`), today's
+day should be **visually unmistakable** when the popover is open —
+an outline + bold weight using the same Lumo-primary vocabulary as
+the main calendar grid (see BACKLOG #2 for the grid counterpart).
+
+### Motivation
+
+When the navigation bar was designed, the Today button inside the
+popover was suppressed via `DatePickerI18n.setToday("")` so the
+single Today affordance lives in the navigation group. Side effect:
+Vaadin's date picker marks today through the same styling class the
+Today button uses — with the button suppressed, the popover lost its
+visual „today" anchor. Anyone working out „2026-09-15 — how many
+weeks from today?" mentally had no reference point.
+
+Restoring the visual anchor without bringing back the duplicate
+button is the right balance.
+
+### Sketch
+
+CSS-only solution in `chronogrid.css` via Vaadin's date-picker shadow
+parts:
+
+```css
+vaadin-date-picker-overlay-content::part(today),
+vaadin-date-picker::part(today) {
+    outline: 2px solid var(--lumo-primary-color);
+    outline-offset: -2px;
+    border-radius: 50%;
+    font-weight: 700;
+}
+```
+
+Both selectors are listed so the rule works whether the consumer's
+Vaadin version exposes the `today` part on the overlay-content or
+on the host date-picker element directly.
+
+### Acceptance signals
+
+- ✅ Opening the date-picker popover („Zum Datum springen") shows
+  today's day with a Lumo-primary outline and bold weight, clearly
+  distinguishable from other days.
+- ✅ Works in both light and dark Lumo themes (outline colour
+  inherits the consumer's `--lumo-primary-color`).
+- ✅ The „single Today affordance" rule still holds — exactly ONE
+  Today button stays visible (in the navigation bar's `navGroup`);
+  the popover gains visual anchoring without restoring its own
+  button.
+
+### Risks / open questions
+
+- **Vaadin part-name verification:** the rule covers both
+  `vaadin-date-picker-overlay-content::part(today)` and
+  `vaadin-date-picker::part(today)`. If a future Vaadin version
+  changes the part name, the rule degrades to a no-op (no visual
+  regression elsewhere) and the issue surfaces in manual smoke
+  testing.
+- **Locale edge case:** „today" is client-side, time-zone-relative.
+  Vaadin's date picker computes the today flag on the browser side,
+  so a daylight-saving change at midnight cannot land on the wrong
+  day server-side.
+- **Future variant — Path B:** if the part-name verification ever
+  shows that Vaadin has stopped exposing a today part, the fallback
+  is to bring the popover's default Today button back and remove
+  the navigation-bar one. That breaks the established
+  „one-Today-affordance" UX decision, so the path is documented but
+  deliberately not taken first.

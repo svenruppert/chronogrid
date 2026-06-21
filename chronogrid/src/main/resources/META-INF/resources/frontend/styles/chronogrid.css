@@ -292,3 +292,18 @@
     color: var(--lumo-primary-color);
     font-weight: 700;
 }
+
+/* ── Today anchor in the date-picker popover (Feature #4) ────── */
+
+/* Vaadin's DatePicker overlay renders today's day with
+   part="today". When the navigation bar's Today-suppression trick
+   (DatePickerI18n.setToday("")) is in force, the popover loses its
+   default „today" marking — these rules restore a visible anchor
+   that matches the calendar-grid today highlight from Feature #5. */
+vaadin-date-picker-overlay-content::part(today),
+vaadin-date-picker::part(today) {
+    outline: 2px solid var(--lumo-primary-color);
+    outline-offset: -2px;
+    border-radius: 50%;
+    font-weight: 700;
+}
