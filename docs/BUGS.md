@@ -31,8 +31,15 @@ als historischer Record mit Commit- bzw. Begründungs-Verweis.
 > aussucht, wired dieser nicht übernomen. In der Kalenderview wird
 > er auch immer noch in der selben Farbe angezeigt.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test (zweite Bruchstelle)
+**Status:** ✅ behoben 2026-06-21 in `246dade` (Bruchstelle B, Render-Pfad) + `b2e4938` (Bruchstelle A, Save-Pfad). Sven-verifiziert: Pick → Save → Reload → App-Neustart → Re-Login behält die gewählte Farbe.
 **Filed:** 2026-06-21
+
+> **Cross-Provider-Hinweis (nicht Teil dieses Bugs):** Wird ein
+> Termin in der iCloud-eigenen UI editiert, verwirft iCloud beim
+> Zurückschreiben die RFC-7986-`COLOR`-Property — die individuelle
+> Farbe ist danach weg. iCloud kennt nur Per-Kalender-Farben in
+> seinem Datenmodell. Workaround / Folge-Bug separat tracken
+> (siehe ggf. BUG #2).
 
 ### Analyse
 
