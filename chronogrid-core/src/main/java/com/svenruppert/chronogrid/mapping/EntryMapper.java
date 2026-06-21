@@ -119,16 +119,48 @@ public final class EntryMapper {
   public static final String CUSTOM_CATEGORIES = "caldavCategories";
 
   /**
-   * Non-standard X- property name for the sidechannel write of the
-   * per-event colour. See BUG #2: iCloud's native UI strips the
-   * RFC-7986 {@code COLOR} property when round-tripping an edited
-   * event, but per RFC 5545 §3.8.8.2 implementations must preserve
-   * unknown {@code X-} properties — so writing the colour twice
-   * (standard {@code COLOR} + this sidechannel) gives us
-   * cross-provider durability without sacrificing
-   * RFC-7986 compliance.
+   * Suffix marker the writer appends to the DESCRIPTION field for
+   * the per-event colour sidechannel. See BUG #2 final analysis:
+   *
+   * <ul>
+   *   <li>The RFC-7986 {@code COLOR} property gets stripped by
+   *       iCloud's native UI on the user-edit-rewrite path
+   *       (iCloud has no per-event-colour concept in its data
+   *       model).</li>
+   *   <li>Custom {@code X-} properties (we tried
+   *       {@code X-CHRONOGRID-COLOR}) <strong>also</strong> get
+   *       stripped — Apple's own docs admit only
+   *       {@code X-APPLE-*} properties are preserved through
+   *       the UI-edit pipeline.</li>
+   *   <li>Apple-survived fields with user-editable text are the
+   *       only durable carrier: {@code SUMMARY}, {@code DESCRIPTION},
+   *       {@code URL}. {@code DESCRIPTION} carries the colour with
+   *       least UX intrusion (footer marker the user can ignore).</li>
+   * </ul>
+   *
+   * <p>Format: a single line at the end of the description,
+   * preceded by a blank line for visual separation:
+   *
+   * <pre>{@code
+   * <user's description>
+   *
+   * [chronogrid-color: #ff0000]
+   * }</pre>
+   *
+   * <p>The reader parses the suffix, strips it from
+   * {@code entry.getDescription()} before exposing to the UI, and
+   * stamps the captured colour onto {@link #CUSTOM_ENTRY_COLOR}.
+   * The writer re-appends the suffix on save. Round-trip is
+   * idempotent.
+   *
+   * <p>Forgiving regex on read (accepts variation in whitespace);
+   * strict format on write (one canonical form).
    */
-  public static final String X_CG_COLOR = "X-CHRONOGRID-COLOR";
+  public static final String COLOUR_MARKER_PREFIX = "[chronogrid-color:";
+
+  private static final java.util.regex.Pattern COLOUR_MARKER_PATTERN =
+      java.util.regex.Pattern.compile(
+          "(?:\\s*\\n)*\\s*\\[chronogrid-color:\\s*(#[0-9a-fA-F]{3,8})\\]\\s*$");
 
   private final ZoneId displayZone;
 
@@ -162,8 +194,24 @@ public final class EntryMapper {
     Entry entry = new Entry(id);
     Optional.ofNullable(vevent.getSummary()).map(s -> s.getValue())
         .ifPresent(entry::setTitle);
-    Optional.ofNullable(vevent.getDescription()).map(d -> d.getValue())
-        .ifPresent(entry::setDescription);
+
+    // DESCRIPTION holds two things round-tripped: the user's notes
+    // and (BUG #2 workaround) an optional [chronogrid-color: #xxx]
+    // suffix marker. Parse + strip here so the UI only ever sees
+    // the clean user-notes text.
+    String descRaw = Optional.ofNullable(vevent.getDescription())
+        .map(d -> d.getValue()).orElse(null);
+    String descCleaned = descRaw;
+    String colourFromMarker = null;
+    if (descRaw != null) {
+      java.util.regex.Matcher m = COLOUR_MARKER_PATTERN.matcher(descRaw);
+      if (m.find()) {
+        colourFromMarker = m.group(1);
+        descCleaned = descRaw.substring(0, m.start()).stripTrailing();
+        if (descCleaned.isEmpty()) descCleaned = null;
+      }
+    }
+    if (descCleaned != null) entry.setDescription(descCleaned);
 
     boolean allDay = isAllDay(vevent.getDateStart());
     entry.setAllDay(allDay);
@@ -183,22 +231,21 @@ public final class EntryMapper {
     Optional.ofNullable(vevent.getUrl()).map(u -> u.getValue())
         .filter(s -> !s.isBlank())
         .ifPresent(s -> entry.setCustomProperty(CUSTOM_URL, s));
-    // Read the per-event colour with a sidechannel fallback. The
-    // standard RFC-7986 COLOR property is preferred; if it's
-    // absent we look for X-CHRONOGRID-COLOR (BUG #2 workaround).
-    // Reason: iCloud's native UI strips COLOR when round-tripping
-    // an edited event, but per RFC 5545 §3.8.8.2 implementations
-    // must preserve unknown X- properties — so X-CHRONOGRID-COLOR
-    // survives where COLOR doesn't. The reader treats both as the
-    // same value.
+    // Read the per-event colour with the BUG #2 fallback chain.
+    // Preference order:
+    //   (1) RFC-7986 COLOR property   — preserved by all standards-
+    //       compliant providers; iCloud preserves it as long as the
+    //       user doesn't edit the event in iCloud's own UI.
+    //   (2) DESCRIPTION suffix marker — Apple-survivable workaround,
+    //       see COLOUR_MARKER_PREFIX docs. Parsed and stripped above.
+    //   (3) absent → no CUSTOM_ENTRY_COLOR set; caller may overlay
+    //       from a local-store fallback (ChronoGrid does this).
+    String rawColor = Optional.ofNullable(vevent.getColor())
+        .map(c -> c.getValue()).orElse(null);
     String entryColour =
-        Optional.ofNullable(vevent.getColor()).map(c -> c.getValue())
-            .filter(s -> !s.isBlank())
-            .orElseGet(() -> Optional.ofNullable(
-                vevent.getExperimentalProperty(X_CG_COLOR))
-                .map(biweekly.property.RawProperty::getValue)
-                .filter(s -> !s.isBlank())
-                .orElse(null));
+        (rawColor != null && !rawColor.isBlank()) ? rawColor
+        : (colourFromMarker != null && !colourFromMarker.isBlank())
+            ? colourFromMarker : null;
     if (entryColour != null) {
       entry.setCustomProperty(CUSTOM_ENTRY_COLOR, entryColour);
     }
@@ -318,21 +365,28 @@ public final class EntryMapper {
     String uid = entry.getId() != null ? entry.getId() : UUID.randomUUID().toString();
     vevent.setUid(uid);
     if (entry.getTitle() != null) vevent.setSummary(entry.getTitle());
-    if (entry.getDescription() != null) vevent.setDescription(entry.getDescription());
+
+    String entryColor = entry.getCustomProperty(CUSTOM_ENTRY_COLOR);
+    boolean haveColour = entryColor != null && !entryColor.isBlank();
+
+    // Description: combine user notes with the BUG #2 colour-suffix
+    // marker so the colour survives iCloud's user-edit-rewrite. The
+    // marker only goes in when the entry actually carries a custom
+    // colour; otherwise the description writes through unchanged.
+    String userDesc = entry.getDescription();
+    String descToWrite = composeDescription(userDesc, haveColour ? entryColor : null);
+    if (descToWrite != null) vevent.setDescription(descToWrite);
 
     String location = entry.getCustomProperty(CUSTOM_LOCATION);
     if (location != null && !location.isBlank()) vevent.setLocation(location);
     String url = entry.getCustomProperty(CUSTOM_URL);
     if (url != null && !url.isBlank()) vevent.setUrl(url);
-    String entryColor = entry.getCustomProperty(CUSTOM_ENTRY_COLOR);
-    if (entryColor != null && !entryColor.isBlank()) {
+    if (haveColour) {
+      // RFC-7986 COLOR — preserved by every standards-compliant
+      // provider AND by iCloud as long as the event isn't touched
+      // in iCloud's own UI. The DESCRIPTION marker above is the
+      // safety net for the latter case.
       vevent.setColor(entryColor);
-      // BUG #2 sidechannel: also write X-CHRONOGRID-COLOR so the
-      // value survives a round-trip through providers that strip
-      // RFC-7986 COLOR but preserve X- properties (iCloud's native
-      // UI is the known case). Reader prefers COLOR, falls back
-      // to X-CHRONOGRID-COLOR when COLOR is absent.
-      vevent.setExperimentalProperty(X_CG_COLOR, entryColor);
     }
 
     writeCategories(vevent, entry.getCustomProperty(CUSTOM_CATEGORIES));
@@ -512,5 +566,28 @@ public final class EntryMapper {
   private static String normaliseTag(String raw) {
     if (raw == null) return "";
     return raw.trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  // ── DESCRIPTION colour-marker round-trip (BUG #2) ─────────────
+
+  /**
+   * Combines the user-visible description with the colour-suffix
+   * marker for the BUG #2 sidechannel. {@code null} for no marker,
+   * returns the user description unchanged; null user description
+   * + null colour returns null (no DESCRIPTION property emitted).
+   *
+   * <p>Canonical write format:
+   * <pre>{@code <user description>\n\n[chronogrid-color: #ff0000]}</pre>
+   * with a single blank line separator. If the user description is
+   * empty/null but a colour is given, only the marker line is
+   * emitted.
+   */
+  public static String composeDescription(String userDesc, String colour) {
+    boolean haveColour = colour != null && !colour.isBlank();
+    boolean haveDesc = userDesc != null && !userDesc.isEmpty();
+    if (!haveColour) return haveDesc ? userDesc : null;
+    String marker = COLOUR_MARKER_PREFIX + " " + colour + "]";
+    if (!haveDesc) return marker;
+    return userDesc.stripTrailing() + "\n\n" + marker;
   }
 }

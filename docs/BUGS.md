@@ -237,48 +237,89 @@ Browser-Smoke-Test-Iterationen.
 > iCloud-Web-UI bearbeitet wird, kommt er ohne unsere COLOR-
 > Property zurück.)*
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test (dritter Anlauf, Hybrid-Architektur)
 **Filed:** 2026-06-21
 
 ### Analyse
 
-**Ursache (provider-seitig, nicht in unserem Code):** iCloud's
-Datenmodell für Kalender-Einträge kennt nur Per-Kalender-Farben,
-keine Per-Event-Farben. Wenn die iCloud-eigene UI (Web oder
-native Apple Apps) einen Termin editiert und über CalDAV
-zurückschreibt, verwirft sie die RFC-7986-`COLOR`-Property still,
-weil sie sie in ihr Datenmodell nicht abbilden kann. Per RFC 5545
-ist das nicht spezifikationskonform (Implementations „MUST be
-forward compatible" mit unbekannten Properties), aber es ist die
-Realität.
+**Iterationsverlauf (drei Anläufe an demselben Tag):**
 
-**Unser Standard-Schreibpfad** (vor Fix) schrieb die User-Farbe
-nur als `COLOR:#ff0000`-Zeile. Nach iCloud-Edit: Property weg,
-beim nächsten `findInRange` liest `EntryMapper.toEntry` keinen
-COLOR-Wert, `CUSTOM_ENTRY_COLOR` wird nicht gesetzt,
-`CalendarService.applyColours` fällt in den Uniform-Branch
-(beide Slots = Kalender-Farbe). Ende: User-Pick weg.
+**Versuch 1 (`0bd1243`) — `X-CHRONOGRID-COLOR`-Sidechannel als
+zusätzliche X-Property.** Hypothese basierte auf RFC 5545 §3.8.8.2,
+das vorschreibt: Implementierungen MUST preserve unknown X-
+properties. Empirisch widerlegt — iCloud strippt eigene
+X-Properties beim User-Edit-Rewrite identisch wie `COLOR`.
 
-**Lösungsidee — RFC-konformer Sidechannel.** RFC 5545 §3.8.8.2
-spezifiziert `X-` Properties als den vorgesehenen Mechanismus
-für nicht-standardisierte Erweiterungen und verlangt von
-Implementierungen, sie über Round-trips zu erhalten — exakt das,
-was iCloud bei COLOR nicht tut, aber bei X-Properties durchaus.
-Wir schreiben die User-Farbe also doppelt:
+**Diagnose-Lauf (uncommitted).** Diagnostic-Logger in
+`EntryMapper.toEntry` dumpt COLOR + X-CG-Status + alle X-
+Properties. Empirische Belege aus Svens iCloud-Test:
 
-- **`COLOR:#ff0000`** — RFC-7986-Standard, primärer Lesepfad.
-  Bleibt drin für Forward-Compat und für Provider, die sie
-  korrekt round-trippen.
-- **`X-CHRONOGRID-COLOR:#ff0000`** — Sidechannel. Bleibt erhalten
-  wenn iCloud `COLOR` strippt.
+```
+[BUG#2 DIAG] uid=D58ABB6F-... (unedittiert)
+   COLOR=absent X-CG=absent other-X=[X-APPLE-TRAVEL-ADVISORY-BEHAVIOR=AUTOMATIC]
+[BUG#2 DIAG] uid=4b3b9c54-... (nach iCloud-Edit)
+   COLOR=absent X-CG=absent other-X=[]
+```
 
-**Reader-Logik:** prefer COLOR (authoritativ wenn vorhanden),
-fallback X-CHRONOGRID-COLOR (recovery für iCloud-Edited-Events).
-Nach erneutem Save aus unserer App stehen wieder beide drin.
+Selbst Apples **eigene** X-Property (`X-APPLE-TRAVEL-ADVISORY-…`)
+ist nach dem iCloud-Edit weg. Apple-Doku bestätigt nachträglich:
+> „Apple filtert nicht alle X-Properties, sondern behält eigene
+> wie `X-APPLE-STRUCTURED-LOCATION` oder `X-APPLE-TRAVEL-ADVISORY`.
+> Eigene Erweiterungen werden jedoch fast immer gelöscht."
 
-Wenn iCloud irgendwann den COLOR-Strip stoppt: bestehender Code
-funktioniert weiter ohne Änderung (COLOR wird einfach öfter
-respektiert, X- bleibt als Backup).
+X-Properties sind tot. Apples Whitelist akzeptiert nur eigene.
+
+**Versuch 2 (dieser Commit) — Hybrid: COLOR + DESCRIPTION-
+Suffix-Marker + lokaler Per-UID-Store.** Apples eigene Doku nennt
+DESCRIPTION als „Feld, das bei UI-Edits unangetastet bleibt". Wir
+hängen einen diskreten Marker ans Ende der DESCRIPTION:
+
+```
+<Nutzer-Notiztext>
+
+[chronogrid-color: #ff0000]
+```
+
+`EntryMapper`:
+- **Reader-Kette:** RFC-7986-`COLOR` → DESCRIPTION-Marker (Apple-
+  resilient) → null (= Fallback aus dem lokalen Store, macht
+  `ChronoGrid`).
+- **Writer:** schreibt `COLOR` PLUS appendet den Marker an die
+  DESCRIPTION (canonical format mit Leerzeilen-Separator).
+- **Round-trip-Idempotenz:** Reader strippt den Marker bevor
+  `entry.setDescription()` den UI-sichtbaren Wert setzt; Writer
+  re-appendet beim nächsten Save.
+
+`CalendarStateStore`:
+- **Neuer Per-UID-Store** (`readEntryColour` / `writeEntryColour` /
+  `clearEntryColour`). Default-Impl no-op, `VaadinSessionCalendar
+  StateStore` persistiert in einer `Map<String,String>` als
+  Session-Attribut `calendar.entryColours`.
+- **Garantierte Auffangschicht** — auch wenn der User den
+  Marker in iCloud aus der DESCRIPTION löscht, hat unsere App
+  noch die Farbe im lokalen Store.
+
+`ChronoGrid.rangeWithStatus`:
+- **Overlay-Peek** vor der Subscription-Override-Stage: wenn
+  `CUSTOM_ENTRY_COLOR` weder von COLOR noch vom Marker gesetzt
+  wurde, schlägt der Store nach und re-runt `applyColours`.
+- **Save-Mirror** in `persistSave`: spiegelt die User-Pick-Farbe
+  bzw. ein Clear in den Store. Delete-Pfad räumt die Map auf.
+
+**Resilienz-Matrix:**
+
+| Pfad | RFC-COLOR | DESC-Marker | Local-Store | Ergebnis |
+|---|---|---|---|---|
+| In-App-only Round-trip | ✓ | ✓ | ✓ | Farbe |
+| Nach iCloud-Edit (Description unberührt) | ✗ | ✓ | ✓ | Farbe (über Marker) |
+| Nach iCloud-Edit + User löscht Description | ✗ | ✗ | ✓ | Farbe (über Store) |
+| Anderer Browser/Installation (gleiche iCloud) | ✓ | ✓ | ✗ | Farbe |
+| Anderer Browser/Installation, nach iCloud-Edit | ✗ | ✓ | ✗ | Farbe (über Marker) |
+| Anderer Browser, iCloud-Edit + Marker gelöscht | ✗ | ✗ | ✗ | Default-Farbe (akzeptiert, sehr seltener Pfad) |
+
+Nur die letzte Zeile ist der unrettbare Pfad — und auch dort
+verliert man nur die Per-Event-Farbe, die Kalender-Quell-Farbe
+bleibt. Pragmatisch akzeptabel.
 
 ### Betroffene Features
 
@@ -310,53 +351,77 @@ dem COLOR-Property-Roundtrip.
 
 **Erwartetes Verhalten nach dem Fix:**
 
-5'. Im iCalendar-Body nach Save aus unserer App stehen **beide**
-    Zeilen drin: `COLOR:#ff0000` und `X-CHRONOGRID-COLOR:#ff0000`.
-6'. iCloud strippt `COLOR` beim Edit, aber `X-CHRONOGRID-COLOR`
-    bleibt erhalten.
-7'. Beim Re-Read in unserer App liest der Reader den
-    Sidechannel und stellt die rote Farbe wieder her.
+5'. Im iCalendar-Body nach Save aus unserer App steht
+    `COLOR:#ff0000` UND am Ende der DESCRIPTION der Marker
+    `[chronogrid-color: #ff0000]`.
+6'. iCloud strippt `COLOR` beim Edit, behält die DESCRIPTION
+    verbatim → Marker bleibt drin.
+7'. Beim Re-Read in unserer App liest der Reader den Marker und
+    stellt die rote Farbe wieder her, strippt den Marker
+    gleichzeitig aus der UI-sichtbaren DESCRIPTION.
+8'. **Zusätzlich:** lokaler Per-UID-Store als Auffangschicht falls
+    der User den Marker beim iCloud-Edit aus der Description
+    entfernt — dann zieht die Farbe aus dem Store.
 
 ### Touchpoints
 
-- `chronogrid-core: mapping/EntryMapper.java#X_CG_COLOR` (Konstante,
-  neu) — Property-Name `X-CHRONOGRID-COLOR`
-- `chronogrid-core: mapping/EntryMapper.java#toEntry` (~Zeile 159) —
-  Reader: prefer COLOR, fallback X-CHRONOGRID-COLOR
-- `chronogrid-core: mapping/EntryMapper.java#toICalendarText`
-  (~Zeile 328) — Writer: `vevent.setColor(...)` und
-  `vevent.setExperimentalProperty(X_CG_COLOR, ...)` parallel
-- `chronogrid-core: test/EntryMapperColourSidechannelTest.java` (neu) —
-  5 Tests für Write-beide, Read-prefer-COLOR, Read-fallback,
-  Read-keine-Properties, blank-Sidechannel-ignoriert
+- `chronogrid-core: mapping/EntryMapper.java#COLOUR_MARKER_PREFIX`
+  + `COLOUR_MARKER_PATTERN` — Marker-Konstante + forgiving regex
+- `chronogrid-core: mapping/EntryMapper.java#toEntry` — Reader:
+  Parser strippt Marker aus DESCRIPTION + setzt `CUSTOM_ENTRY_COLOR`
+  als COLOR-Fallback
+- `chronogrid-core: mapping/EntryMapper.java#toICalendarText` —
+  Writer: schreibt `COLOR` + ruft `composeDescription` um den
+  Marker anzuhängen
+- `chronogrid-core: mapping/EntryMapper.java#composeDescription`
+  (neu, public) — Canonical-Format-Helper
+- `chronogrid-core: state/CalendarStateStore.java` — neue
+  Default-Methoden `readEntryColour` / `writeEntryColour` /
+  `clearEntryColour` (no-op defaults für externe Implementierer)
+- `chronogrid: state/VaadinSessionCalendarStateStore.java` —
+  Override mit Session-Attribut `calendar.entryColours`
+- `chronogrid: ui/ChronoGrid.java#rangeWithStatus` — Overlay-Peek
+  liest Store falls COLOR + Marker beide fehlen
+- `chronogrid: ui/ChronoGrid.java#persistSave` — Mirror-Write in
+  den Store auf jedem Save
+- `chronogrid: ui/ChronoGrid.java#confirmAndDelete` — Cleanup im
+  Store auf Delete
+- `chronogrid-core: test/EntryMapperColourSidechannelTest.java`
+  (komplett neu geschrieben) — 10 Tests: Write-COLOR-und-Marker,
+  Description-Format, Marker-standalone, Read-prefer-COLOR,
+  Read-fallback-Marker, Marker-only-strip, kein-Marker,
+  composeDescription-Roundtrip, ohne-Farbe, Write-Read-Roundtrip
 
 ### Größe
 
-S. Drei kleine Änderungen in `EntryMapper` plus eine neue Test-
-Klasse (5 Tests). Geschätzt 30 Minuten inkl. SpotBugs.
+M. Multi-Layer-Change (Core-Mapper + State-Store-Interface + UI-
+Wiring + 10 neue Tests). Geschätzt 90 Minuten inkl. Tests +
+SpotBugs + Diagnose-Lauf, plus dritten Browser-Smoke-Test.
 
 ### Risiko / offene Fragen
 
-- **Andere Provider könnten COLOR korrekt round-trippen, aber
-  X-Properties nicht.** Unwahrscheinlich (X- gilt seit RFC 5545
-  von 2009 als Pflicht), aber theoretisch möglich. In dem Fall
-  bliebe COLOR erhalten und die App liest sie als primären Pfad —
-  also kein Datenverlust, nur kein Sidechannel-Backup. Akzeptabel.
-- **Bytes-Bloat im iCalendar-Body.** Jeder colour-Event trägt jetzt
-  ~25 zusätzliche Bytes. Bei tausenden Events in einem Kalender:
-  einige KB. Vernachlässigbar gegenüber dem typischen Event-
-  Footprint (Description, Location, Recurrence-Rules).
-- **iCloud könnte X-Properties später ebenfalls strippen.** Wenn
-  das je passiert: kein Sidechannel-Backup mehr verfügbar, BUG
-  re-opened, evtl. Workaround über CATEGORIES mit
-  Sonder-Prefix (Kollisionsrisiko mit BACKLOG #3-Tags). v1
-  hofft auf RFC-Konformität bei X-Properties.
-- **Andere Konsumenten (Apple Calendar, Thunderbird) könnten
-  `X-CHRONOGRID-COLOR` als Müll anzeigen.** Spec sagt: SHOULD
-  ignorieren wenn nicht verstanden. Apple Calendar und
-  Thunderbird sind beide spec-konform für X-Properties → keine
-  sichtbare Auswirkung.
-- **Andere Apps schreiben evtl. ihre eigenen X-Properties für
-  Farben** (z.B. `X-APPLE-CALENDAR-COLOR`, `X-OUTLOOK-COLOR`).
-  Reader v1 liest sie nicht — Folge-Idee für eine v2 wäre eine
-  Cross-Property-Fallback-Kette. Nicht für diesen Fix.
+- **User editiert den Marker per Hand aus der Beschreibung.** Dann
+  verliert er die Farbe — außer der lokale Store hat sie noch.
+  Wenn auch der Store leer ist (z.B. zweiter Browser, Session
+  abgelaufen), ist die Farbe verloren. Akzeptable Kosten für
+  eine verlorene Edge-Case-Optimierung.
+- **DESCRIPTION-Marker sichtbar in iCloud-UI.** Der User sieht
+  `[chronogrid-color: #ff0000]` als letzte Zeile seiner Notiz.
+  Diskret aber nicht versteckt. Falls Feedback dass es stört:
+  v2 könnte Zero-Width-Space-Umrandung versuchen (höchst
+  fragil) oder per Mini-CSS in unserer App ausblenden (klappt
+  nur in unserer App, nicht in iCloud).
+- **Lokaler Store ist Vaadin-Session-scoped.** Verfällt mit der
+  Session. Bei langlaufendem Use Case (Persistenz über Sessions
+  hinweg): in `AppStoragePaths` als JSON-Datei persistieren —
+  Folge-Erweiterung, hier nicht im Scope.
+- **Andere Apps zeigen `[chronogrid-color: …]` als Müll.** Acceptable
+  — Apple Calendar / Thunderbird zeigen den Marker als Teil der
+  Notiz, was er ja technisch auch ist. Die Per-Event-Farbe
+  bleibt eine chronogrid-spezifische Funktionalität, die in
+  fremden Clients keine Wirkung hat.
+- **Performance: Regex auf jeder DESCRIPTION pro Read.** Trivial
+  (regex ist kurz, anchored am Ende, fast immer Cache-Miss bei
+  Events ohne Marker).
+
+## BUG - Wenn ich einen Tag in den Datumsselektor anklicke der einen bunten Balken hat, friert die Anwendung ein und ich muss ein Pagereload machen

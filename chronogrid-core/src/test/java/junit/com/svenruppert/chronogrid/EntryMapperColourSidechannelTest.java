@@ -28,37 +28,45 @@ import java.time.Month;
 import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * BUG #2 — iCloud's native UI strips the RFC-7986 {@code COLOR}
- * property when it round-trips an edited event, because its data
- * model has no per-event colour concept. Per RFC 5545 §3.8.8.2
- * implementations must preserve unknown {@code X-} properties, so
- * writing the colour twice — standard {@code COLOR} + sidechannel
- * {@code X-CHRONOGRID-COLOR} — gives cross-provider durability.
+ * BUG #2 — iCloud's native UI strips RFC-7986 {@code COLOR} <em>and</em>
+ * custom {@code X-} properties when an event is edited in iCloud's
+ * own editor. Per Apple's own documentation, only {@code X-APPLE-*}
+ * properties are preserved through that pipeline; the durable
+ * carriers are {@code SUMMARY}, {@code DESCRIPTION}, {@code URL}.
  *
- * <p>This test class pins the contract:
+ * <p>This test class pins the contract of the DESCRIPTION-suffix
+ * marker the writer appends + the reader strips:
+ *
+ * <pre>{@code
+ * <user description>
+ *
+ * [chronogrid-color: #ff0000]
+ * }</pre>
+ *
  * <ul>
- *   <li>Write path emits both properties when {@code CUSTOM_ENTRY_COLOR}
- *       is set.</li>
- *   <li>Read path prefers {@code COLOR}.</li>
- *   <li>Read path falls back to {@code X-CHRONOGRID-COLOR} when
- *       {@code COLOR} is missing (the iCloud-edited-event case).</li>
- *   <li>Without either property the entry has no custom colour
- *       (uniform with calendar default).</li>
+ *   <li>Write emits both {@code COLOR} and the suffix marker.</li>
+ *   <li>Read prefers {@code COLOR}; strips the marker either way.</li>
+ *   <li>When {@code COLOR} is absent (post-iCloud-edit case) but the
+ *       marker survived, the marker carries the value.</li>
+ *   <li>The cleaned description is what the UI sees, never the raw
+ *       marker text.</li>
  * </ul>
  */
-@DisplayName("EntryMapper — per-event COLOR + X-CHRONOGRID-COLOR sidechannel (BUG #2)")
+@DisplayName("EntryMapper — DESCRIPTION colour-marker sidechannel (BUG #2)")
 class EntryMapperColourSidechannelTest {
 
   @Test
-  @DisplayName("write emits BOTH COLOR and X-CHRONOGRID-COLOR when entry has a colour")
+  @DisplayName("write emits BOTH COLOR and the DESCRIPTION-suffix marker when entry has a colour")
   void writeEmitsBoth() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("colour-uid");
     entry.setTitle("With colour");
+    entry.setDescription("Sven's quick notes");
     entry.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
     entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
     entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#ff0000");
@@ -66,14 +74,50 @@ class EntryMapperColourSidechannelTest {
     String body = mapper.toICalendarText(entry);
 
     assertTrue(body.contains("COLOR:#ff0000"),
-        "RFC-7986 COLOR must be written for compliance; got:\n" + body);
-    assertTrue(body.contains("X-CHRONOGRID-COLOR:#ff0000"),
-        "Sidechannel X-CHRONOGRID-COLOR must be written so the value "
-            + "survives iCloud's strip-on-edit; got:\n" + body);
+        "RFC-7986 COLOR must be written for standards-compliant providers; got:\n" + body);
+    assertTrue(body.contains("[chronogrid-color: #ff0000]"),
+        "DESCRIPTION-suffix marker must be written so the colour survives "
+            + "iCloud's edit-rewrite (where it strips COLOR + every X- property); got:\n" + body);
   }
 
   @Test
-  @DisplayName("read prefers COLOR when both are present")
+  @DisplayName("write composes description as <user-text>\\n\\n<marker> with blank-line separator")
+  void writeFormatsDescriptionWithSeparator() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("format-uid");
+    entry.setTitle("Format");
+    entry.setDescription("first line\nsecond line");
+    entry.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
+    entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#00ff00");
+
+    String body = mapper.toICalendarText(entry);
+
+    // Biweekly wraps long lines and escapes newlines; check that the
+    // user text and the marker are both in there with a separator.
+    assertTrue(body.contains("first line"));
+    assertTrue(body.contains("second line"));
+    assertTrue(body.contains("[chronogrid-color: #00ff00]"));
+  }
+
+  @Test
+  @DisplayName("write emits marker without DESCRIPTION header collision when no user description")
+  void writeMarkerStandaloneWhenNoUserDescription() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("standalone-uid");
+    entry.setTitle("No notes");
+    entry.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
+    entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#0000ff");
+
+    String body = mapper.toICalendarText(entry);
+
+    assertTrue(body.contains("[chronogrid-color: #0000ff]"),
+        "Marker must still emit when there is no user description; got:\n" + body);
+  }
+
+  @Test
+  @DisplayName("read prefers COLOR when both COLOR and the marker are present")
   void readPrefersStandardColor() {
     String ical = """
         BEGIN:VCALENDAR
@@ -81,11 +125,11 @@ class EntryMapperColourSidechannelTest {
         PRODID:-//flow-template//test//EN
         BEGIN:VEVENT
         UID:both-uid
-        SUMMARY:Both properties
+        SUMMARY:Both
+        DESCRIPTION:My notes\\n\\n[chronogrid-color: #ff0000]
         DTSTART:20260614T100000Z
         DTEND:20260614T110000Z
         COLOR:#00ff00
-        X-CHRONOGRID-COLOR:#ff0000
         END:VEVENT
         END:VCALENDAR
         """;
@@ -95,26 +139,26 @@ class EntryMapperColourSidechannelTest {
 
     assertEquals("#00ff00",
         entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
-        "When both properties are present the standard COLOR wins — "
-            + "it's the authoritative value and the sidechannel is just "
-            + "for survival across providers.");
+        "When both COLOR and the marker are present, COLOR wins — it's the standard.");
+    assertEquals("My notes", entry.getDescription(),
+        "The marker must be stripped from the description shown to the UI either way.");
   }
 
   @Test
-  @DisplayName("read falls back to X-CHRONOGRID-COLOR when COLOR is missing")
-  void readFallsBackToSidechannel() {
-    // This simulates the post-iCloud-edit state: iCloud stripped
-    // COLOR but preserved the X- property.
+  @DisplayName("read falls back to the DESCRIPTION marker when COLOR is missing (iCloud-edited case)")
+  void readFallsBackToMarker() {
+    // Simulates post-iCloud-edit state: iCloud stripped COLOR and
+    // every X- property, but it preserved DESCRIPTION verbatim.
     String ical = """
         BEGIN:VCALENDAR
         VERSION:2.0
         PRODID:-//flow-template//test//EN
         BEGIN:VEVENT
         UID:icloud-edited-uid
-        SUMMARY:iCloud-edited event
+        SUMMARY:iCloud-edited
+        DESCRIPTION:Some notes from Sven\\n\\n[chronogrid-color: #ff0000]
         DTSTART:20260614T100000Z
         DTEND:20260614T110000Z
-        X-CHRONOGRID-COLOR:#ff0000
         END:VEVENT
         END:VCALENDAR
         """;
@@ -124,20 +168,49 @@ class EntryMapperColourSidechannelTest {
 
     assertEquals("#ff0000",
         entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
-        "When COLOR is absent the sidechannel takes over so the "
-            + "user's pick survives iCloud's native-UI strip.");
+        "When COLOR is absent the DESCRIPTION marker must restore the user's colour.");
+    assertEquals("Some notes from Sven", entry.getDescription(),
+        "Marker stripped from the user-visible description.");
   }
 
   @Test
-  @DisplayName("no colour properties → no CUSTOM_ENTRY_COLOR (uniform fallback)")
-  void readWithNeitherIsClean() {
+  @DisplayName("read strips the marker even when the entry has no description body")
+  void readMarkerOnlyDescription() {
     String ical = """
         BEGIN:VCALENDAR
         VERSION:2.0
         PRODID:-//flow-template//test//EN
         BEGIN:VEVENT
-        UID:nocolour-uid
-        SUMMARY:Plain event
+        UID:marker-only-uid
+        SUMMARY:Marker only
+        DESCRIPTION:[chronogrid-color: #abcdef]
+        DTSTART:20260614T100000Z
+        DTEND:20260614T110000Z
+        END:VEVENT
+        END:VCALENDAR
+        """;
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = mapper.toEntry(new RemoteEvent(
+        URI.create("http://host/cal/marker-only.ics"), "\"e1\"", ical));
+
+    assertEquals("#abcdef",
+        entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR));
+    assertNull(entry.getDescription(),
+        "When the marker was the ONLY content, the cleaned description is null "
+            + "so the UI doesn't render an empty notes block.");
+  }
+
+  @Test
+  @DisplayName("read returns no colour and the raw description when neither COLOR nor marker are present")
+  void readWithoutAnyMarkerOrColour() {
+    String ical = """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        PRODID:-//flow-template//test//EN
+        BEGIN:VEVENT
+        UID:plain-uid
+        SUMMARY:Plain
+        DESCRIPTION:Just normal notes here
         DTSTART:20260614T100000Z
         DTEND:20260614T110000Z
         END:VEVENT
@@ -147,36 +220,57 @@ class EntryMapperColourSidechannelTest {
     Entry entry = mapper.toEntry(new RemoteEvent(
         URI.create("http://host/cal/plain.ics"), "\"e1\"", ical));
 
-    assertNull(
-        entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
-        "Without either COLOR or X-CHRONOGRID-COLOR the entry must "
-            + "have no CUSTOM_ENTRY_COLOR, so CalendarService.applyColours "
-            + "falls into the uniform-calendar-colour branch.");
+    assertNull(entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
+        "Without either signal the entry has no custom colour — applyColours "
+            + "downstream falls into the uniform-calendar-colour branch.");
+    assertEquals("Just normal notes here", entry.getDescription(),
+        "Description passes through unchanged when there is no marker to strip.");
   }
 
   @Test
-  @DisplayName("a blank X-CHRONOGRID-COLOR is treated as absent")
-  void blankSidechannelIgnored() {
-    String ical = """
-        BEGIN:VCALENDAR
-        VERSION:2.0
-        PRODID:-//flow-template//test//EN
-        BEGIN:VEVENT
-        UID:blank-uid
-        SUMMARY:Blank sidechannel
-        DTSTART:20260614T100000Z
-        DTEND:20260614T110000Z
-        X-CHRONOGRID-COLOR:
-        END:VEVENT
-        END:VCALENDAR
-        """;
-    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
-    Entry entry = mapper.toEntry(new RemoteEvent(
-        URI.create("http://host/cal/blank.ics"), "\"e1\"", ical));
+  @DisplayName("composeDescription helper combines user text + marker idempotently")
+  void composeDescriptionHelperRoundtrip() {
+    String composed =
+        EntryMapper.composeDescription("My notes", "#ff0000");
+    assertTrue(composed.endsWith("[chronogrid-color: #ff0000]"),
+        "Marker is appended at the end; got: '" + composed + "'");
+    assertTrue(composed.startsWith("My notes"),
+        "User text is preserved at the start; got: '" + composed + "'");
+    assertTrue(composed.contains("\n\n[chronogrid-color:"),
+        "Blank-line separator between user text and marker; got: '" + composed + "'");
+  }
 
-    assertNull(
-        entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
-        "Empty / whitespace X-CHRONOGRID-COLOR must not yield "
-            + "CUSTOM_ENTRY_COLOR — same forgiving rule as the COLOR path.");
+  @Test
+  @DisplayName("composeDescription returns plain text when no colour is supplied")
+  void composeDescriptionNoColour() {
+    assertEquals("Hello", EntryMapper.composeDescription("Hello", null));
+    assertEquals("Hello", EntryMapper.composeDescription("Hello", ""));
+    assertEquals("Hello", EntryMapper.composeDescription("Hello", "   "));
+    assertNull(EntryMapper.composeDescription(null, null));
+    assertNull(EntryMapper.composeDescription("", null));
+  }
+
+  @Test
+  @DisplayName("write-then-read round-trips colour + description losslessly via biweekly")
+  void writeThenReadRoundtrip() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry written = new Entry("rt-uid");
+    written.setTitle("Round-trip");
+    written.setDescription("Notes paragraph 1.\nParagraph 2.");
+    written.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
+    written.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
+    written.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#b31e52");
+
+    String body = mapper.toICalendarText(written);
+    Entry read = mapper.toEntry(new RemoteEvent(
+        URI.create("http://host/cal/rt.ics"), "\"e1\"", body));
+
+    assertEquals("#b31e52",
+        read.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR),
+        "Colour must survive write+read (standard COLOR is the primary path).");
+    assertEquals("Notes paragraph 1.\nParagraph 2.", read.getDescription(),
+        "Description must survive write+read with the marker stripped on read.");
+    assertFalse(read.getDescription().contains("chronogrid-color"),
+        "Cleaned description never contains the marker prefix.");
   }
 }

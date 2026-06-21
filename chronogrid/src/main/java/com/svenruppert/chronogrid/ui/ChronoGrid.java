@@ -699,6 +699,30 @@ public class ChronoGrid extends Composite<VerticalLayout>
           return false;
         });
       }
+      // BUG #2 local-store overlay: if neither RFC-7986 COLOR nor
+      // the DESCRIPTION-suffix marker survived (the classic
+      // iCloud-user-edit case), look up the local per-UID colour
+      // store as the unconditional fallback. Runs BEFORE the
+      // subscription override so applyColours below sees the
+      // restored CUSTOM_ENTRY_COLOR and emits the split-colour
+      // (fill = own, border = calendar).
+      stream = stream.peek(e -> {
+        if (e.getCustomProperty(
+            com.svenruppert.chronogrid.mapping.EntryMapper.CUSTOM_ENTRY_COLOR) != null) return;
+        String uid = e.getId();
+        if (uid == null) return;
+        stateStore.readEntryColour(uid).ifPresent(c -> {
+          e.setCustomProperty(
+              com.svenruppert.chronogrid.mapping.EntryMapper.CUSTOM_ENTRY_COLOR, c);
+          String calColour = e.getCustomProperty(
+              com.svenruppert.chronogrid.service.CalendarService
+                  .CUSTOM_CALENDAR_COLOR);
+          if (calColour != null && !calColour.isBlank()) {
+            com.svenruppert.chronogrid.service.CalendarService
+                .applyColours(e, calColour);
+          }
+        });
+      });
       if (!colorByCollection.isEmpty()) {
         stream = stream.peek(e ->
             com.svenruppert.chronogrid.service.CalendarService
@@ -1142,6 +1166,18 @@ public class ChronoGrid extends Composite<VerticalLayout>
     try {
       Entry persisted = service.save(entry, targetCollection);
       markConnected();
+      // BUG #2 local-store mirror: keep the per-UID colour map in
+      // sync with what the user just picked. If the user un-set
+      // the colour, drop the stored value too. Read side overlays
+      // from here when neither RFC-7986 COLOR nor the description
+      // marker survived the CalDAV round-trip.
+      String pickedColour = persisted.getCustomProperty(
+          com.svenruppert.chronogrid.mapping.EntryMapper.CUSTOM_ENTRY_COLOR);
+      if (pickedColour != null && !pickedColour.isBlank()) {
+        stateStore.writeEntryColour(persisted.getId(), pickedColour);
+      } else {
+        stateStore.clearEntryColour(persisted.getId());
+      }
       if (isNew) {
         calendar.getEntryProvider().refreshAll();
       } else {
@@ -1397,6 +1433,11 @@ public class ChronoGrid extends Composite<VerticalLayout>
       try {
         service.delete(entry);
         markConnected();
+        // BUG #2 cleanup: don't leave the colour ghosted in the
+        // local store after the event itself is gone.
+        if (entry.getId() != null) {
+          stateStore.clearEntryColour(entry.getId());
+        }
         calendar.getEntryProvider().refreshAll();
       } catch (ConcurrentModificationException cme) {
         markConnected();

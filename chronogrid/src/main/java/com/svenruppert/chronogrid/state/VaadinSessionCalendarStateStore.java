@@ -47,6 +47,7 @@ public final class VaadinSessionCalendarStateStore
   public static final String SESSION_KEY_SERVERS = "calendar.servers";
   public static final String SESSION_KEY_NDAYS = "calendar.nav.nDays";
   public static final String SESSION_KEY_TAG_FILTER = "calendar.tagFilter";
+  public static final String SESSION_KEY_ENTRY_COLOURS = "calendar.entryColours";
 
   @Override
   public Optional<CalDavConnectionConfig> readConnection() {
@@ -136,6 +137,53 @@ public final class VaadinSessionCalendarStateStore
       return java.util.Collections.unmodifiableSet(out);
     }
     return java.util.Set.of();
+  }
+
+  @Override
+  public java.util.Optional<String> readEntryColour(String entryUid) {
+    if (entryUid == null) return java.util.Optional.empty();
+    VaadinSession session = VaadinSession.getCurrent();
+    if (session == null) return java.util.Optional.empty();
+    java.util.Map<String, String> map = readEntryColourMap(session);
+    return java.util.Optional.ofNullable(map.get(entryUid));
+  }
+
+  @Override
+  public void writeEntryColour(String entryUid, String colour) {
+    if (entryUid == null) return;
+    VaadinSession session = VaadinSession.getCurrent();
+    if (session == null) return;
+    java.util.Map<String, String> next =
+        new java.util.HashMap<>(readEntryColourMap(session));
+    if (colour == null || colour.isBlank()) {
+      next.remove(entryUid);
+    } else {
+      next.put(entryUid, colour);
+    }
+    session.setAttribute(SESSION_KEY_ENTRY_COLOURS,
+        java.util.Collections.unmodifiableMap(next));
+  }
+
+  @Override
+  public void clearEntryColour(String entryUid) {
+    writeEntryColour(entryUid, null);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static java.util.Map<String, String> readEntryColourMap(
+      VaadinSession session) {
+    Object raw = session.getAttribute(SESSION_KEY_ENTRY_COLOURS);
+    if (raw instanceof java.util.Map<?, ?> map) {
+      java.util.Map<String, String> out = new java.util.HashMap<>();
+      for (java.util.Map.Entry<?, ?> e : map.entrySet()) {
+        if (e.getKey() instanceof String k
+            && e.getValue() instanceof String v) {
+          out.put(k, v);
+        }
+      }
+      return out;
+    }
+    return java.util.Map.of();
   }
 
   @Override

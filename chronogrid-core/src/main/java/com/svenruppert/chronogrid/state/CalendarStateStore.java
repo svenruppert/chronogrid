@@ -100,4 +100,30 @@ public interface CalendarStateStore {
   default void writeTagFilter(Set<String> tags) {
     // no-op default — overridden by VaadinSessionCalendarStateStore
   }
+
+  /**
+   * BUG #2 local colour-fallback store. iCloud's native UI strips
+   * both RFC-7986 {@code COLOR} and custom {@code X-} properties on
+   * user-edit-rewrite — neither survives the round-trip through
+   * Apple's own editor. The DESCRIPTION-suffix marker survives if
+   * the user doesn't edit the description, but a careful local
+   * store gives an unconditional fallback: per-UID colour kept
+   * outside CalDAV so iCloud's behaviour can't touch it.
+   *
+   * <p>{@link #readEntryColour(String)} returns {@link Optional#empty()}
+   * when no colour was ever stored for that UID. The default impl
+   * here returns empty; the Vaadin-session impl persists per
+   * UI session.
+   */
+  default Optional<String> readEntryColour(String entryUid) {
+    return Optional.empty();
+  }
+
+  default void writeEntryColour(String entryUid, String colour) {
+    // no-op default
+  }
+
+  default void clearEntryColour(String entryUid) {
+    // no-op default
+  }
 }
