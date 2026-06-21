@@ -23,6 +23,25 @@ Status-Legende:
 Lifecycle: behobene und verworfene Bugs **bleiben in dieser Datei**
 als historischer Record mit Commit- bzw. Begründungs-Verweis.
 
+## Übersicht
+
+Schneller Überblick — Snapshot der `**Status:**`-Zeilen aus den
+einzelnen Einträgen unten. Bei jedem Status-Wechsel **diese
+Tabelle parallel aktualisieren**.
+
+| # | Titel | Status | Commit / Notiz |
+|---|---|---|---|
+| #1 | Per-Event-Farbe wird nicht übernommen | ✅ behoben | `246dade` + `b2e4938` |
+| #2 | Per-Event-Farbe geht beim iCloud-Edit verloren | ✅ behoben | `7ac73ca` |
+| #3 | Datumsselektor friert bei Klick auf Tag mit Farbbalken ein | ✅ behoben | `e4302f4` |
+| #4 | Multi-Kalender + Reload: alle Termine verschwinden | ✅ behoben | `d0abe01` |
+| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | 🟡 erfasst — braucht DevTools-Inspect | — |
+| #6 | Verbindungsmanagement-UX ungenügend | 🟡 erfasst — UX, evtl. besser als Feature-Planning-Eintrag | — |
+| #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | 🔬 analysiert | — |
+| #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
+| #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
+| #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
+
 ---
 
 ## #1 — Per-Event-Farbe wird nicht übernommen, der Eintrag bleibt in der Kalender-Farbe
@@ -548,7 +567,7 @@ verlassen uns auf die manuelle Verifikation.
 > dann bringt ein Re-Load nichts mehr - Alle Termine weg in der
 > UI.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** ✅ behoben 2026-06-21 in `d0abe01` (`resolveInitialService` prüft jetzt zuerst Multi-Server-State, fällt erst dann auf Legacy-Single-Connection zurück). Sven-verifiziert: nach Route-Navigation/Reload bleiben alle verbundenen Kalender im Service-Client-Set.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -1038,3 +1057,350 @@ Geschätzt 30 Minuten.
 - **Cross-Migration:** wenn ein User einen Termin aus iCloud nach
   Nextcloud kopiert, kommt der Marker mit. Reader strippt ihn,
   aber Nextcloud-User sieht ihn temporär. Akzeptabel.
+
+---
+
+## #8 — Abonnieren und De-Abonnieren von Kalendern muss einfacher werden
+
+> **Original:** Abbonieren und De-Abbonieren muss für den User
+> einfach machbar sein.
+
+**Status:** 🟡 erfasst — UX-Anforderung, eng verwandt mit BUG #6
+**Filed:** 2026-06-21
+
+### Analyse
+
+Sehr nahe Verwandte zu BUG #6 — „Verbindungsmanagement-UX". Die
+Trennung in Svens Aufzählung lässt vermuten: #6 fokussiert auf
+*Server-Connection hinzufügen/entfernen* (Auth + Discovery), #8
+auf *einzelne Kalender innerhalb eines bereits verbundenen Servers
+aktivieren/deaktivieren*.
+
+Aktueller Pfad für Abonnieren:
+
+1. User klickt **Subscriptions** in der Toolbar.
+2. `SubscriptionsDialog` öffnet → Liste pro Server mit
+   Visibility-Checkbox + Farb-Override.
+3. Visibility-Toggle ändert das `visible`-Flag in der
+   `CalendarSubscription`, persistiert via
+   `stateStore.writeSubscriptions(...)`.
+4. `refreshAll()` triggert Re-Fetch — die Visibility-Filter in
+   `rangeWithStatus` ziehen, der Kalender wird im Grid ein-
+   bzw. ausgeblendet.
+
+Aktueller Pfad für De-Abonnieren:
+
+1. User klickt im SubscriptionsDialog auf den Entfernen-Knopf
+   eines Eintrags.
+2. Eintrag wird aus der `subscriptions`-Liste gestrichen,
+   `pruneOrphanServers` räumt ggf. den verwaisten Server weg.
+3. `rebuildServiceFromSubscriptions` + `refreshAll` aktualisieren.
+
+**Wahrscheinliche UX-Probleme** (überschneidend mit BUG #6):
+
+- **Subscribe ist zweistufig**: erst Server connecten, dann
+  Subscriptions-Dialog auf und einzeln aktivieren. Default
+  beim Connecten ist anscheinend „alle Kalender aktivieren"
+  (Sven bitte bestätigen) — aber das Mental Model „ich klicke
+  Connect und sehe Termine" ist nicht direkt erfüllt, weil der
+  Subscription-Dialog ein extra Schritt ist.
+- **Toggle-Granularität**: pro-Kalender ein/aus-Schalten ist
+  granular, aber wenn ich „nur die wichtigsten" sehen will,
+  muss ich jeden einzeln klicken.
+- **Visibility-Discovery**: wenn auf dem Server ein neuer Kalender
+  hinzukommt (z.B. iCloud-Account legt eine neue Liste an), holt
+  unsere App den nicht automatisch — Discovery läuft nur auf
+  Connect.
+- **Bulk-Aktionen** fehlen: „alle ein", „alle aus", „nur diesen".
+
+**Mögliche Lösungsrichtung** (offen, braucht Designgespräch):
+
+- **Quick-Toggle in der Toolbar**: kleine Liste der Subscriptions
+  mit Color-Dot + Name + Toggle-Checkbox direkt sichtbar, ohne
+  Dialog.
+- **Re-Discovery-Button** im SubscriptionsDialog: „Neue Kalender
+  suchen" + automatisches Hinzufügen mit Default-visible=false.
+- **Bulk-Aktionen**: „Alle ein/aus" pro Server-Sektion.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #3** — *Per-entry tags + cross-calendar
+  tag filter*: das Tag-Filter-Konzept setzt voraus dass User
+  alle ihre Kalender aktiviert haben. Wenn das Abonnieren
+  umständlich ist, leidet auch der Cross-Cal-Tag-Filter.
+- **Indirekt**: alle Features die Termine darstellen, da die
+  Visibility-Subscription-Logik die Vorfilterung macht.
+
+### Reproduktion
+
+Subjektiv. Sven berichtet das Subscription-Management als
+mühsam. Konkrete Friction-Points sollten beim Design-Schritt
+katalogisiert werden.
+
+### Touchpoints (Erkundung)
+
+- `chronogrid: ui/SubscriptionsDialog.java` — aktueller Subscribe-
+  Editor
+- `chronogrid: ui/ChronoGrid.java#applyConfigFromSettings` (~Zeile
+  1018 ff.) — Discovery-Apply-Flow, der Subscriptions
+  default-aktivierend erzeugt
+- `chronogrid: ui/ConnectionsDialog.java` — Server-Liste; hier
+  könnte ein „Quick-Subscribe"-UI angebaut werden
+
+### Größe
+
+L. UX-Refactor wie BUG #6 — eher 2–4 Tage Designer-Schritt +
+Implementation.
+
+Empfehlung: **BUG #6 + #8 zusammen** als einen Connection-
+Manager-UX-Feature in `Feature-Planning.md` migrieren statt zwei
+parallele Bug-Tracks. Sobald die User-Story konkret ist, kann
+das Feature im normalen Feature-Workflow durch.
+
+### Risiko / offene Fragen
+
+- **Konkrete User-Story fehlt** (wie bei #6). „Einfach machbar"
+  ist nicht spezifizierbar; Sven sollte beschreiben welche
+  konkreten Klick-Pfade als zu lang empfunden werden.
+- **Discovery-Trigger**: soll Re-Discovery automatisch laufen
+  (Pull alle X Minuten?) oder manuell?
+- **Default-Visibility neuer Kalender**: aktivieren-by-default
+  (Spam-Risiko) oder deaktivieren-by-default (User-Aktion
+  nötig)?
+
+---
+
+## #9 — Notifikationen passen nicht mehr zum Mehrverbindungs-Konzept
+
+> **Original:** Die Notifikationen passen nicht mehr zu einem
+> Mehr-Verbindungskonzept.
+
+**Status:** 🔬 analysiert
+**Filed:** 2026-06-21
+
+### Analyse
+
+Die `notifyInfo`/`notifyError`/`notifyConflict`-Aufrufe in
+ChronoGrid sind aus der Single-Server-Zeit übrig und referenzieren
+„die Verbindung" statt einer konkreten. Konkrete Stellen die
+unscharf werden im Multi-Server-Kontext:
+
+| Stelle | Aktuelle Message-Schablone | Multi-Server-Problem |
+|---|---|---|
+| Refresh-Button | „Reloaded from {0}" mit `service.collectionUri()` | `collectionUri()` ist nur die *primary* Collection — bei 3 verbundenen Kalendern verschweigt die Notification die anderen zwei |
+| Apply-Connection | „Connected to {0}" — nur die neue URI | Andere bereits-verbundene Server bleiben implicit; User weiß nicht wie viele Server jetzt aktiv sind |
+| Subscription-Remove | „Disconnected from {0}" | Singular OK, aber Kontext fehlt: „wie viele bleiben übrig?" |
+| Error-Pfad | Generischer „Could not save: {error}" | Bei mehreren Servern: welcher hatte den Fehler? Welcher Kalender? |
+| Connect/Disconnect-Toasts | Single-Server-zentrisch | Kein „Server X verbunden, 4 Kalender abonniert, Y Termine gefunden"-Multi-Server-Summary |
+
+**Lösungsrichtung:**
+
+1. **Status-aware Notifications** — `notifyInfo(...)` erweitern um
+   ein optionales Subject („für Server X, Kalender Y"). Auf
+   ChronoGrid-Seite überall die Subject-Info mitgeben.
+2. **Multi-Server-Summary** als eigene Notification-Variante:
+   „Connection-State: 3 Server, 7 Kalender, 42 Termine".
+   Auslösen nach Refresh + Connection-Änderungen.
+3. **Pro-Server-Status-Updates** — `ServerStatusList` zeigt schon
+   pro-Server-Connected/Disconnected-Pills, aber die Notifications
+   spiegeln den Detailgrad nicht.
+4. **Error-Surfacing** mit Server-Identität — wenn Server X
+   einen 403 liefert, „Server X (URL) lehnt ab" statt nur
+   „Could not save".
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #5** — *Per-day appointment dots*:
+  Notifications könnten erklären „N Server abgefragt, M Termine
+  in der Visible-Range".
+- **Indirekt alle Features** die mehrere Server berühren —
+  Notifications sind die einzige Stelle, an der die App dem
+  User Multi-Server-State kommuniziert.
+
+### Reproduktion
+
+Subjektiv. Konkretes Beispiel aus Svens Test-Sitzung:
+
+1. iCloud + Nextcloud verbunden.
+2. Refresh-Button klicken.
+3. Notification: „Reloaded from
+   https://nx93157.../personal/" — verschweigt die zwei iCloud-
+   Calendars die parallel geladen wurden.
+
+### Touchpoints
+
+- `chronogrid: ui/ChronoGrid.java#notifyInfo` /
+  `notifyError` / `notifyConflict` — die Notification-Helper
+- `chronogrid: ui/ChronoGrid.java` Refresh-Button-Handler
+  (~Zeile 383)
+- `chronogrid: ui/ChronoGrid.java` Apply-Connection-Handler
+  (~Zeile 1030)
+- `chronogrid: ui/ChronoGrid.java` Subscription-Remove-Handler
+  (~Zeile 1354)
+- `chronogrid: ui/ChronoGrid.java#persistSave` (~Zeile 1165) —
+  Error-Pfad mit Server-Identität anreichern
+- i18n-Keys `calendar.notify.*` in `translations*.properties` —
+  Templates erweitern um Multi-Server-Slots
+
+### Größe
+
+S–M. Wenn man die Messages nur erweitert und neue i18n-Keys
+einführt: S (60 Min). Wenn man eine echte Multi-Server-Summary-
+Notification baut: M (2–3 Stunden inkl. Tests).
+
+Empfehlung: **mit BUG #6 + #8 zusammen** im Connection-Manager-
+UX-Refactor angehen — die Notifications sind ein Teil der UX-
+Story, kein isolierter Bug.
+
+### Risiko / offene Fragen
+
+- **i18n-Aufwand**: jede neue Message-Variante braucht EN+DE-
+  Übersetzungen.
+- **Notification-Spam**: bei 5+ Servern könnten Multi-Server-
+  Summaries zu lang werden. Kollabieren auf „N Server, M
+  Termine" als Default, Detail-Link für Drill-down.
+
+---
+
+## #10 — Fetch über mehrere Verbindungen muss parallel + asynchron sein, mit Fortschrittsbalken
+
+> **Original:** Laden der einzelnen Daten über verschiedene
+> Verbindungen sollte parallel und asynchron gehen.
+> Fortschrittsbalken sind notwendig.
+
+**Status:** 🔬 analysiert
+**Filed:** 2026-06-21
+
+### Analyse
+
+Aktueller Code in `CalendarService.fanOut` (chronogrid-core,
+~Zeile 191):
+
+```java
+private Stream<Entry> fanOut(...) {
+    Stream.Builder<Entry> all = Stream.builder();
+    int total = 0;
+    for (int i = 0; i < readClients.size(); i++) {
+        CalDavClient client = readClients.get(i);
+        ...
+        for (RemoteEvent remote : op.apply(client)) {   // ← SYNCHRON, sequenziell
+            ...
+        }
+    }
+    ...
+    return all.build();
+}
+```
+
+Heute: alle Clients werden **sequenziell** abgefragt im selben
+Thread. Wer 5 CalDAV-Server hat, die jeweils 800 ms REPORT
+brauchen, wartet 4 Sekunden bis ein Termin sichtbar wird —
+unzumutbar.
+
+**Zwei Aspekte zu beheben:**
+
+**(a) Parallel-Fetch.** Statt `for client : readClients { sync }`
+einen `CompletableFuture`-Pfad pro Client öffnen, dann
+`CompletableFuture.allOf(...)` collecten. Threadpool: ein
+dedizierter `Executor` (z.B. `Executors.newFixedThreadPool(8)`)
+in der `CalendarService`. CalDavClient ist HTTP-basiert und
+thread-safe.
+
+**(b) Async UI-Update + Fortschritt.** Vaadin's `UI#access` ist
+nötig um aus Worker-Threads die UI zu aktualisieren. Statt
+fanOut zu blockieren bis alles da ist:
+
+1. Sofort einen leeren EntryProvider zurückgeben (Grid zeigt
+   nichts).
+2. Pro Client async fetchen.
+3. Sobald Client fertig: `UI.access` → Entries dem Grid hinzufügen
+   + Fortschrittsbalken um 1/N erhöhen.
+4. Wenn alle fertig: Fortschritt verstecken.
+
+**Architektur-Implikation:**
+
+- `CalendarService.findInRange(...)` müsste eine async API
+  bekommen (z.B. `CompletableFuture<Stream<Entry>>` oder eine
+  reaktive `Publisher<Entry>`-Variante). Die existierende
+  synchrone API kann als wrapper bleiben für Tests + simple
+  Callers.
+- `ChronoGrid.rangeWithStatus` müsste den FullCalendar
+  EntryProvider asynchron befüllen. FullCalendar Vaadin Add-on
+  unterstützt das nur eingeschränkt — müsste geprüft werden
+  ob die Add-on-API einen Callback für nachgeladene Entries
+  hat oder ob wir mit `refreshAll()` arbeiten müssen.
+- **Fortschrittsbalken**: Vaadin's `ProgressBar` (determinate)
+  oder ein `Notification` mit Counter. Position: in der
+  Toolbar neben dem Refresh-Button oder als Toast-Overlay.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #5** — *Per-day appointment dots in
+  popover*: profitiert direkt — Popover-Open ist heute auch
+  syn-fetch, mit Multi-Server wäre er besonders langsam.
+- **FEATURE_BACKLOG.md #3** — *Tag-Filter*: profitiert weil
+  Multi-Cal-Setups häufiger werden wenn Subscribe einfacher ist
+  (siehe BUG #8).
+- **Indirekt alle Features** die `findInRange` aufrufen.
+
+### Reproduktion
+
+1. Mehr als 2 Server verbunden (z.B. iCloud + Nextcloud).
+2. Calendar-Route öffnen.
+3. **Tatsächlich:** Spürbare Pause bis Termine erscheinen,
+   linear mit der Anzahl der Server.
+4. Bei Server-Timeouts: einer hängt → die anderen Server warten
+   mit, alles steht.
+
+**Erwartet:** Termine erscheinen sukzessive sobald einzelne
+Server antworten. Fortschrittsbalken zeigt „Server 2 von 5
+geladen". Hängender Server blockiert die anderen nicht.
+
+### Touchpoints
+
+- `chronogrid-core: service/CalendarService.java#fanOut` (~Zeile
+  191) — von sequenziell auf parallel
+- `chronogrid-core: service/CalendarService.java` — neuer
+  `Executor`-Field + Shutdown-Hook (Vaadin-Session-Lifecycle
+  beachten)
+- `chronogrid-core: service/CalendarService.java#findInRange` /
+  `findInRangeAsResult` — async-API ergänzen
+- `chronogrid: ui/ChronoGrid.java#rangeWithStatus` — async-
+  Variante, EntryProvider asynchron befüllen
+- `chronogrid: ui/ChronoGrid.java` — neue
+  ProgressBar-Komponente in der Toolbar
+- Vaadin Stefan FullCalendar Add-on Doku — async-Add-Pfad prüfen
+- `chronogrid-core: client/CalDavClient.java` — Thread-Safety
+  bestätigen (HTTPClient ist thread-safe, aber unsere Wrapper
+  ggf. nicht)
+
+### Größe
+
+L. Parallel-Fetch + async UI-Update + ProgressBar ist eine
+echte Architektur-Erweiterung. Geschätzt 1–2 Tage Implementation
++ Tests (unit-tests für Thread-Safety, IT für Multi-Server-
+Reihenfolge-Unabhängigkeit).
+
+Empfehlung: **erst nach BUG #5 und #7**, weil die hier alleine
+nichts Visuelles bringen. Sobald Performance unter Multi-Server
+tatsächlich stört, hier ran.
+
+### Risiko / offene Fragen
+
+- **Thread-Safety in CalDavClient.** Heute Single-Thread-Use,
+  müsste auf Concurrent-Safety geprüft werden.
+- **Executor-Shutdown**: Vaadin-Session-Lifecycle kennt
+  `addSessionDestroyListener`, dort sauber `executor.shutdown()`
+  aufrufen. Sonst Thread-Leak.
+- **Order-Sensitivity**: aktuell garantiert sequenzieller Fetch
+  eine deterministische Entry-Reihenfolge. Parallel + async
+  ändert die Reihenfolge — FullCalendar-Renderer sollte robust
+  sein (Events haben Start-Time-Sortierung intern), aber
+  Edge-Cases wie Recurring-Events könnten flackern.
+- **Fortschrittsbalken-UX**: nervig bei schnellen Servern,
+  hilfreich bei langsamen. Vielleicht erst nach 500 ms Wartezeit
+  einblenden (Smart-Delay).
+- **Vaadin-Stefan-Add-on-Async-Support**: muss geprüft werden ob
+  der EntryProvider asynchron nachgeladen werden kann oder ob
+  wir komplett auf `refreshAll`-after-each-client ausweichen
+  müssen (würde mehr Rendering-Aufwand bedeuten).
