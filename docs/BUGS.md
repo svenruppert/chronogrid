@@ -35,12 +35,14 @@ Tabelle parallel aktualisieren**.
 | #2 | Per-Event-Farbe geht beim iCloud-Edit verloren | ✅ behoben | `7ac73ca` |
 | #3 | Datumsselektor friert bei Klick auf Tag mit Farbbalken ein | ✅ behoben | `e4302f4` |
 | #4 | Multi-Kalender + Reload: alle Termine verschwinden | ✅ behoben | `d0abe01` |
-| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
+| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | `d25e377` |
 | #6 | Verbindungsmanagement-UX ungenügend | 🟡 erfasst — UX, evtl. besser als Feature-Planning-Eintrag | — |
-| #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
+| #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | ✅ behoben | `d25e377` |
 | #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
+| #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
+| #12 | Farbe in Nextcloud gesetzt → wird beim Reload nicht übernommen | 🟡 erfasst — brauche Nextcloud-iCal-Body zur Hypothesen-Auswahl | — |
 
 ---
 
@@ -971,7 +973,7 @@ Refresh") mit echtem Konzept- und Design-Schritt.
 > NextCloud wieder als reguläres Attribut, so dass man die Farbe
 > dann auch in NextCloud sieht.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** ✅ behoben 2026-06-21 in `d25e377` (Hostname-Suffix-Match `*.icloud.com` + Parameter durch `EntryMapper.toICalendarText(Entry, boolean appleSidechannel)`). Sven-verifiziert: Nextcloud-Termine kommen ohne Marker, iCloud-Termine behalten ihn.
 **Filed:** 2026-06-21
 
 ### Fix-Notiz
@@ -1447,3 +1449,279 @@ tatsächlich stört, hier ran.
   der EntryProvider asynchron nachgeladen werden kann oder ob
   wir komplett auf `refreshAll`-after-each-client ausweichen
   müssen (würde mehr Rendering-Aufwand bedeuten).
+
+---
+
+## #11 — Neuer Termin auf Nextcloud erscheint dort als Tagestermin trotz gesetzter Uhrzeit
+
+> **Original:** Ich erzeuge in der UI einen Termin für NextCloud
+> in der Zeit von A bis B - In NextCloud wird mir dieser als
+> Tagesevent angezeigt. Wenn der Termin einmal eine Zeit
+> bekommen hat dann geht es in beide Richtungen.
+
+**Status:** 🟡 erfasst — vermutet, aber nicht verifiziert
+**Filed:** 2026-06-21
+
+### Analyse
+
+Sehr aufschlussreich: nach der ersten Erstellung sieht Nextcloud
+den Termin als AllDay. Sobald der Termin **einmal** in Nextcloud
+mit einer Uhrzeit versehen wurde, funktioniert die bidirektionale
+Synchronisation. Daraus folgt: das initiale `PUT` aus unserer App
+nach Nextcloud trägt die Zeit-Information **nicht in dem Format**,
+das Nextcloud erwartet.
+
+**Hypothese A — `DATE` statt `DATE-TIME` im DTSTART.** iCalendar
+unterscheidet zwei DTSTART-Formate:
+
+```
+DTSTART:20260614T100000Z          ← DATE-TIME (timed event)
+DTSTART;VALUE=DATE:20260614       ← DATE (all-day event)
+```
+
+In `EntryMapper.toICalendarText` wird der `DateStart` aus einem
+`ICalDate` gebaut über `toIcalDate(start, zone, allDay)`:
+
+```java
+private ICalDate toIcalDate(LocalDateTime ldt, ZoneId zone, boolean dateOnly) {
+    Instant instant = ldt.atZone(zone).toInstant();
+    return new ICalDate(Date.from(instant), !dateOnly);
+}
+```
+
+Der `!dateOnly` Parameter steuert ob Biweekly das DateTime mit
+Zeit-Komponente serialisiert. Wenn `dateOnly=true` (= allDay
+true), produziert biweekly ein `DATE`-only Format.
+
+Frage: ist `allDay` in unserem Save-Flow korrekt? Aus
+`EventEditorDialog`:
+
+```java
+DateTimePicker start = new DateTimePicker(K_FIELD_START, "Start");
+start.setValue(entry.getStart());
+...
+if (start.getValue() != null) entry.setStart(start.getValue());
+```
+
+Das `entry.isAllDay()` wird im EventEditorDialog NICHT
+explizit gesetzt — also bleibt es vermutlich beim Default-Wert
+des `Entry`. Wenn ein NEUER Entry konstruiert wird:
+
+```java
+Entry draft = new Entry(UUID.randomUUID().toString());
+```
+
+dann ist `draft.isAllDay()` möglicherweise `null` (oder
+default-true je nach FullCalendar-Vaadin-Stefan-Semantik).
+
+**Wahrscheinlich**: `entry.isAllDay()` ist auf `null`/`true` bei
+neu erzeugten Entries, was unser `toICalendarText` als
+`allDay=true` interpretiert und `DTSTART;VALUE=DATE:…` schreibt.
+Nextcloud zeigt's korrekt als AllDay an, weil's so auch
+gesendet wurde.
+
+Dass die bidirektionale Sync danach klappt: sobald Nextcloud
+den Termin mit Uhrzeit setzt, kommt er als korrektes
+`DTSTART:YYYYMMDDTHHMMSSZ` zurück, unser Reader setzt
+`entry.setAllDay(false)`, und ab da läuft's.
+
+**Fix:** Im Save-Pfad explizit `entry.setAllDay(false)` setzen
+wenn `start.getValue()` und `end.getValue()` BEIDE eine
+Zeit-Komponente haben (also nicht 00:00:00 beide). Oder
+default für neue Entries: `setAllDay(false)`.
+
+**Hypothese B — TZID-Kollision.** Falls wir `DATE-TIME` ohne
+TZID schreiben (z.B. "DTSTART:20260614T100000" ohne Z), könnte
+Nextcloud das als floating-time interpretieren und
+fehlbehandeln. Weniger wahrscheinlich aber prüfen.
+
+**Verifikation:** Server-Log nach Save eines neuen Termins
+prüfen — `PUT` body lesen. Wenn `DTSTART;VALUE=DATE:` →
+Hypothese A bestätigt. Wenn `DTSTART:` mit Zeit aber Nextcloud
+ignoriert → Hypothese B.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1, #2, #3, #4, #5** — alle Termin-Render-
+  Features sind vom korrekten Datum-Round-trip abhängig. Wenn ein
+  neuer Termin als AllDay statt timed gesendet wird, sind seine
+  Anzeige in der Quelle UND alle abhängigen Features (z.B.
+  Per-Event-Farbe sichtbar auf timed Events — siehe BUG #5)
+  betroffen.
+
+### Reproduktion
+
+1. Mit Nextcloud verbinden.
+2. In unserer App einen NEUEN Termin anlegen, z.B. 10:00–11:00.
+3. Save.
+4. Nextcloud-Web-UI öffnen → Termin ansehen.
+5. **Tatsächlich:** Nextcloud zeigt ihn als Tagestermin
+   (AllDay).
+6. In Nextcloud den Termin editieren, Zeit explizit setzen,
+   speichern.
+7. In unserer App reload.
+8. **Ab jetzt:** Termin korrekt als timed event, bidirektional
+   funktioniert.
+
+**Erwartet:** Schritt 5 zeigt den Termin mit Zeitangabe
+10:00–11:00, nicht als Tagestermin.
+
+### Touchpoints
+
+- `chronogrid: ui/EventEditorDialog.java` (Save-Handler ~Zeile
+  234 ff.) — vor `entry.setStart(...)` ggf. explizit
+  `entry.setAllDay(false)` setzen
+- `chronogrid: ui/ChronoGrid.java#openNewEventEditor` —
+  Konstruktion eines neuen `Entry`: ggf. Default-Setting für
+  `setAllDay(false)` bei timed-Default
+- `chronogrid-core: mapping/EntryMapper.java#toICalendarText`
+  (~Zeile 376 ff.) — `boolean allDay = Boolean.TRUE.equals(
+  entry.isAllDay());` — prüfen, ob der Default bei null
+  korrekt false ist (ja, ist es: `Boolean.TRUE.equals(null) ==
+  false`)
+
+### Größe
+
+S. Eine Zeile im EventEditorDialog Save-Handler:
+`entry.setAllDay(false);` falls beide DatePicker-Werte eine
+sinnvolle Zeit haben. Plus 1 Integration-Test oder
+Browser-Smoke-Test. Geschätzt 30 Minuten.
+
+### Risiko / offene Fragen
+
+- **AllDay-vs-Timed-UX:** der EventEditorDialog hat aktuell
+  KEINEN expliziten AllDay-Toggle. Sollte er einen bekommen?
+  Vermutlich ja — sonst ist der User abhängig vom impliziten
+  Verhalten (timed-default bei Uhrzeiten ≠ 00:00).
+- **Bestehende AllDay-Events**: wenn der User einen
+  bestehenden AllDay-Termin editiert, darf der Fix den
+  AllDay-Status nicht überschreiben.
+- **Hypothese muss verifiziert werden**: brauche entweder einen
+  Server-Log-Dump nach Save (PUT body wäre ideal) oder direkte
+  Inspektion über Nextcloud's Roh-iCal-Download.
+
+---
+
+## #12 — Farbe in Nextcloud gesetzt → wird beim Reload nicht in die App übernommen
+
+> **Original:** In NextCloud kann ich die Farbe setzen, die wird
+> dann aber nicht in die UI übernommen bei einem Reload/Refresh.
+
+**Status:** 🟡 erfasst — Hypothesen vorhanden, brauche Server-Log oder Nextcloud-iCal-Inspect
+**Filed:** 2026-06-21
+
+### Analyse
+
+Komplementärer Bug zu #7 (Apple-only Marker). Bei #7 war die
+Sorge: Marker in Nextcloud nicht sichtbar machen. Hier umgekehrt:
+**Farbe in Nextcloud gesetzt wird von unserer App nicht
+erkannt**.
+
+Drei mögliche Bruchstellen:
+
+**Hypothese A — Nextcloud setzt die Farbe nicht als RFC-7986
+`COLOR` auf dem Event, sondern als Property auf der
+**Kalender-Collection** (`<x-apple-calendar-color>` o.ä. via
+PROPPATCH).** Nextcloud's Per-Event-Color-Feature ist im
+CalDAV-Standard NICHT genormt — Nextcloud könnte's
+ausschließlich über sein eigenes UI darstellen und gar nicht in
+den iCalendar-Body legen.
+
+**Hypothese B — Nextcloud schreibt die Farbe in eine eigene
+X-Property** wie `X-NEXTCLOUD-COLOR` oder
+`X-APPLE-CALENDAR-COLOR`. Unser EntryMapper liest aktuell nur
+`COLOR` und unseren eigenen `[chronogrid-color: …]`-Marker.
+Eine Nextcloud-spezifische X-Property würden wir ignorieren.
+
+**Hypothese C — Nextcloud schreibt zwar `COLOR`, aber im
+falschen Format** (z.B. CSS named color `red` statt
+`#ff0000`). Unser Reader filtert nur `isBlank()`, sollte aber
+auch named colors akzeptieren — Test nötig.
+
+**Verifikation:** Brauche von Sven entweder
+- Server-Log nach Reload eines Nextcloud-Termins, bei dem in
+  Nextcloud die Farbe gesetzt wurde, oder
+- Direkter iCal-Download des Events aus Nextcloud
+  (Right-click → Save iCal export oder
+  `curl https://nx93157.../event.ics`)
+
+Mit dem iCal-Body kann ich sofort feststellen welches Format
+Nextcloud schreibt.
+
+**Reader-Side-Erweiterung (vermutlich nötig):** zusätzlich zu
+COLOR + DESCRIPTION-Marker auch X-NEXTCLOUD-COLOR /
+X-APPLE-CALENDAR-COLOR (falls Hypothese B). Liest unsere App
+das auch nicht aus PROPPATCH auf der Collection (Hypothese A),
+wäre der einzige Pfad: separater PROPFIND auf jede
+Collection-Subscription, der die `<x-apple-calendar-color>`
+property liest und als Per-Subscription-Farbe in den
+`stateStore.writeSubscriptions` Eintrag übernimmt.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1** — *Per-event colour with a
+  calendar-coloured edge stripe*: aktuell explizit nur
+  unsere-App → Provider. Read-back vom Provider wäre die
+  Symmetrie.
+- **Bezug zu #7**: dort haben wir die Schreibseite Provider-
+  spezifisch gemacht (Apple-Marker vs. Standard-COLOR).
+  Hier geht's um die Leseseite — wie liest unsere App
+  Provider-spezifische Farb-Felder?
+
+### Reproduktion
+
+1. Mit Nextcloud verbinden.
+2. In unserer App einen Termin auf dem Nextcloud-Kalender
+   anlegen.
+3. Nextcloud-Web-UI öffnen.
+4. Im Nextcloud-Termin die Farbe ändern (z.B. auf Rot), in
+   Nextcloud speichern.
+5. In unserer App Reload-Button klicken.
+6. **Tatsächlich:** Termin in unserer App in der
+   Subscription-Default-Farbe (= Kalender-Quell-Farbe), nicht
+   in der in Nextcloud gewählten Rot.
+
+**Erwartet:** Termin in unserer App in Rot — dem in Nextcloud
+gesetzten Wert.
+
+### Touchpoints
+
+- `chronogrid-core: mapping/EntryMapper.java#toEntry` (Color-
+  Read-Block ~Zeile 222 ff.) — Reader-Kette erweitern um
+  zusätzliche X-Properties die Provider statt COLOR verwenden
+- `chronogrid-core: client/CalDavDiscovery.java` —
+  möglicherweise erweitern um Collection-Level-Color-Read
+  (PROPFIND mit `<x-apple-calendar-color>`)
+- `chronogrid-core: service/CalendarService.java#fromConnections`
+  — wenn Hypothese A: Color aus Collection-PROPFIND in die
+  Subscriptions übernehmen
+- `chronogrid: state/CalendarStateStore.java#readEntryColour`
+  — der lokale Store für BUG #2 wäre eine
+  Auffangschicht, wenn der CalDAV-Read den Wert verfehlt —
+  aber die Spec sagt der Read sollte den Wert finden, nicht
+  fallback
+
+### Größe
+
+S–M, abhängig von Hypothese. Wenn B (X-Property): ~30 Min,
+Reader-Erweiterung + Tests. Wenn A (Collection-PROPFIND):
+M, neuer Read-Pfad in CalDavClient + Integration in
+fromConnections, 1–2 Stunden.
+
+### Risiko / offene Fragen
+
+- **Symmetrie zur Schreibseite:** wenn der User die Farbe in
+  unserer App ändert, schreiben wir COLOR + DESCRIPTION-Marker
+  (für iCloud) / COLOR only (für Nextcloud). Wenn Nextcloud
+  die Schreib-Form unseres Writes liest und seinerseits in
+  eine andere Form transformiert, könnten wir round-trip
+  Kompatibilität verlieren.
+- **Provider-Sniffing wächst.** BUG #7 hat den Apple-Detect
+  eingeführt. Wenn #12 einen Nextcloud-Detect bringt + die
+  Tag-Filterung evtl. weitere, wird's hilfreich, einen kleinen
+  `CalDavProviderProfile`-Enum einzuführen statt überall
+  hostname-checks.
+- **Apple's Calendar-Collection-Color in iCloud-eigener UI**:
+  iCloud hat selbst eine Collection-Level-Color. Wenn unser
+  Read-Pfad das auch hochziehen würde, wäre der Default-Color-
+  Pfad symmetrisch zu Nextcloud — Konsistenz-Gewinn.
