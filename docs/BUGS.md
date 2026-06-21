@@ -35,9 +35,9 @@ Tabelle parallel aktualisieren**.
 | #2 | Per-Event-Farbe geht beim iCloud-Edit verloren | ✅ behoben | `7ac73ca` |
 | #3 | Datumsselektor friert bei Klick auf Tag mit Farbbalken ein | ✅ behoben | `e4302f4` |
 | #4 | Multi-Kalender + Reload: alle Termine verschwinden | ✅ behoben | `d0abe01` |
-| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | 🟡 erfasst — braucht DevTools-Inspect | — |
+| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
 | #6 | Verbindungsmanagement-UX ungenügend | 🟡 erfasst — UX, evtl. besser als Feature-Planning-Eintrag | — |
-| #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | 🔬 analysiert | — |
+| #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
 | #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
@@ -704,8 +704,30 @@ SpotBugs.
 > keine Farbkennung der eigenen Farbe wenn der Termin kein
 > Tagestermin ist.
 
-**Status:** 🟡 erfasst — Hypothese vorhanden, brauche DevTools-Inspect zur Bestätigung
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-21
+
+### Fix-Notiz
+
+Defensive CSS-Erweiterung in `chronogrid.css` deckt Hypothesen A
+und B gleichzeitig ab:
+
+1. `.fc-timegrid-event` — Border auf top/right/bottom auf 2 px
+   reduziert (statt 3 px global), Left-Border bleibt bei 4 px
+   für die Provenienz-Kennung. Plus `background-clip: padding-box`,
+   damit der Fill nicht unter dem Border verschwindet.
+2. `.fc-timegrid-event .fc-event-main` (und `.fc-v-event
+   .fc-event-main`) — `background-color: transparent`, damit das
+   innere FullCalendar-Wrapper-Element den outer Fill nicht
+   überlagert.
+
+Hypothese C (FullCalendar liest `color` statt `backgroundColor`)
+ist nicht adressiert — `applyColours` setzt schon
+`setBackgroundColor` korrekt, und FullCalendar v6's TimeGrid
+respektiert das per Default. Falls C nach dem Smoke-Test doch
+zutrifft, würde der Fill weiter unsichtbar bleiben → dann fallback
+auf `setColor(individualColor)` mit explizitem `setBorderColor`-
+Re-Apply als zusätzliche Maßnahme.
 
 ### Analyse
 
@@ -949,8 +971,29 @@ Refresh") mit echtem Konzept- und Design-Schritt.
 > NextCloud wieder als reguläres Attribut, so dass man die Farbe
 > dann auch in NextCloud sieht.
 
-**Status:** 🔬 analysiert
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-21
+
+### Fix-Notiz
+
+Hostname-basierter Apple-Provider-Detector + Parametrisierung
+des Writer-Pfads:
+
+1. `CalendarService.isAppleProviderUri(URI)` — neuer public-static
+   Helper, matcht Hostnamen die auf `icloud.com` enden
+   (catches caldav.icloud.com, p124-…, p-prod-… etc.).
+2. `EntryMapper.toICalendarText(Entry, boolean appleSidechannel)` —
+   Overload. Wenn `false`, DESCRIPTION wird nur mit der User-Notiz
+   geschrieben (kein Marker). `toICalendarText(Entry)` bleibt als
+   Backward-Compat-Variante mit `appleSidechannel=true` (Apple-safe
+   Default).
+3. `CalendarService.save` ruft `isAppleProviderUri(target)` und
+   gibt den Boolean an den Mapper weiter.
+
+Reader-Pfad ist unverändert: liest weiterhin COLOR zuerst, fällt
+auf den Marker zurück wenn präsent, fällt auf den lokalen Store
+zurück (BUG #2). Legacy-iCloud-Events mit Marker werden weiter
+korrekt gelesen.
 
 ### Analyse
 

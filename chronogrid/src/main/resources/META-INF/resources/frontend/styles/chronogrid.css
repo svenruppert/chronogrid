@@ -321,9 +321,29 @@ vaadin-date-picker::part(today) {
 }
 
 /* TimeGrid blocks: keep the left-edge accent prominent so the
-   provenance reads even on busy days where event blocks stack. */
+   provenance reads even on busy days where event blocks stack.
+   BUG #5 fix: override the 3-px global border for the other sides
+   so that small (15-30 min) timed events still show the user-
+   picked fill colour. The 4-px left edge stays as the dominant
+   provenance signal; top/right/bottom drop to 2 px so they don't
+   eat the fill area in narrow event boxes. */
 .fc .fc-timegrid-event {
     border-left-width: 4px;
+    border-top-width: 2px;
+    border-right-width: 2px;
+    border-bottom-width: 2px;
+    background-clip: padding-box;
+}
+
+/* BUG #5: FullCalendar v6's inner .fc-event-main element can carry
+   its own light background that overlays the user-picked fill set
+   on the outer .fc-v-event / .fc-timegrid-event. Force transparent
+   so the picked fill always shines through. Daygrid events render
+   the background on the outer element directly so the fill was
+   already visible there; this rule is a no-op for daygrid. */
+.fc .fc-timegrid-event .fc-event-main,
+.fc .fc-v-event .fc-event-main {
+    background-color: transparent;
 }
 
 /* ── Feature #5: per-day dots inside the date-picker popover ────

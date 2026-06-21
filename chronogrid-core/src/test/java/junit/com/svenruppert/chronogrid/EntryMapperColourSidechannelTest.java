@@ -250,6 +250,74 @@ class EntryMapperColourSidechannelTest {
     assertNull(EntryMapper.composeDescription("", null));
   }
 
+  // ── BUG #7: Apple-only DESCRIPTION-marker switch ─────────────
+
+  @Test
+  @DisplayName("BUG #7: appleSidechannel=false suppresses the DESCRIPTION marker (Nextcloud etc.)")
+  void writeSkipsMarkerForNonApple() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("non-apple-uid");
+    entry.setTitle("On Nextcloud");
+    entry.setDescription("plain notes");
+    entry.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
+    entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#aabbcc");
+
+    String body = mapper.toICalendarText(entry, false);
+
+    assertTrue(body.contains("COLOR:#aabbcc"),
+        "Standard COLOR must still be written — non-Apple providers "
+            + "round-trip it correctly; got:\n" + body);
+    assertFalse(body.contains("[chronogrid-color:"),
+        "DESCRIPTION-marker must NOT be written when appleSidechannel=false — "
+            + "would show up as visible noise in non-Apple UIs; got:\n" + body);
+    assertTrue(body.contains("plain notes"),
+        "User description must pass through unchanged.");
+  }
+
+  @Test
+  @DisplayName("BUG #7: appleSidechannel=true (default) emits the marker (iCloud)")
+  void writeEmitsMarkerForApple() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("apple-uid");
+    entry.setTitle("On iCloud");
+    entry.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
+    entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#ff0000");
+
+    String body = mapper.toICalendarText(entry, true);
+
+    assertTrue(body.contains("COLOR:#ff0000"));
+    assertTrue(body.contains("[chronogrid-color: #ff0000]"),
+        "Marker must still be written for Apple targets — iCloud "
+            + "strips COLOR on user-edit-rewrite and the marker is the "
+            + "only surviving carrier.");
+  }
+
+  @Test
+  @DisplayName("BUG #7: reader is unchanged — picks up the marker even when written by the Apple path")
+  void readerStillFindsMarkerRegardlessOfTargetSwitch() {
+    // Simulates an entry that was written with appleSidechannel=true
+    // (iCloud target) and is now being read back. Verifies the
+    // single-arg toICalendarText helper still defaults to Apple-on,
+    // so any consumer that didn't migrate keeps working.
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry written = new Entry("rt-uid");
+    written.setTitle("Round trip");
+    written.setStart(LocalDateTime.of(2026, Month.JUNE, 14, 10, 0));
+    written.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
+    written.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#123456");
+
+    String body = mapper.toICalendarText(written); // single-arg → marker ON
+    Entry read = mapper.toEntry(new RemoteEvent(
+        URI.create("http://host/cal/rt.ics"), "\"e1\"", body));
+
+    assertTrue(body.contains("[chronogrid-color: #123456]"),
+        "Single-arg overload must default to marker-on (Apple-safe).");
+    assertEquals("#123456",
+        read.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR));
+  }
+
   @Test
   @DisplayName("write-then-read round-trips colour + description losslessly via biweekly")
   void writeThenReadRoundtrip() {

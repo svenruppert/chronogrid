@@ -361,6 +361,27 @@ public final class EntryMapper {
   }
 
   public String toICalendarText(Entry entry) {
+    // Backward-compatible default: emit the DESCRIPTION sidechannel
+    // marker. Apple-safe by default (no harm if the provider isn't
+    // Apple — the marker is just a discreet text line in the notes).
+    return toICalendarText(entry, true);
+  }
+
+  /**
+   * BUG #7: gate the DESCRIPTION-suffix sidechannel marker on the
+   * caller's knowledge of the target provider. Apple iCloud strips
+   * COLOR + every custom X- property on user-edit-rewrite, so
+   * Apple writes need the marker for round-trip durability. Other
+   * providers (Nextcloud, Baikal, Radicale) round-trip COLOR
+   * correctly and would show the marker as user-visible noise in
+   * their own UI — pass {@code appleSidechannel = false} for those.
+   *
+   * <p>The reader path is unchanged either way: it always tries
+   * COLOR first and falls back to the marker if present, so a
+   * legacy entry written with the marker still reads correctly
+   * after the producer switches it off.
+   */
+  public String toICalendarText(Entry entry, boolean appleSidechannel) {
     VEvent vevent = new VEvent();
     String uid = entry.getId() != null ? entry.getId() : UUID.randomUUID().toString();
     vevent.setUid(uid);
@@ -370,11 +391,14 @@ public final class EntryMapper {
     boolean haveColour = entryColor != null && !entryColor.isBlank();
 
     // Description: combine user notes with the BUG #2 colour-suffix
-    // marker so the colour survives iCloud's user-edit-rewrite. The
-    // marker only goes in when the entry actually carries a custom
-    // colour; otherwise the description writes through unchanged.
+    // marker ONLY when the target is an Apple/iCloud provider — the
+    // marker is the only carrier that survives Apple's user-edit-
+    // rewrite. Non-Apple providers don't need it (and would show it
+    // as visible noise in their own UI), so we keep the description
+    // clean for them.
     String userDesc = entry.getDescription();
-    String descToWrite = composeDescription(userDesc, haveColour ? entryColor : null);
+    String descToWrite = composeDescription(
+        userDesc, (haveColour && appleSidechannel) ? entryColor : null);
     if (descToWrite != null) vevent.setDescription(descToWrite);
 
     String location = entry.getCustomProperty(CUSTOM_LOCATION);

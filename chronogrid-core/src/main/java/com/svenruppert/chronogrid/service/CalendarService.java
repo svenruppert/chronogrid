@@ -312,9 +312,14 @@ public final class CalendarService implements HasLogger {
     logger().info("save entry uid={} kind={} mode={} target={}",
         uid, EntryMapper.isTodo(entry) ? "VTODO" : "VEVENT",
         isUpdate ? "update" : "new", target);
+    // BUG #7: emit the DESCRIPTION-suffix colour sidechannel marker
+    // ONLY when the target is an Apple/iCloud provider. Other
+    // providers preserve RFC-7986 COLOR through user-edit-rewrite,
+    // so the marker would show up as visible noise in their UI.
+    boolean appleSidechannel = isAppleProviderUri(target);
     String body = EntryMapper.isTodo(entry)
         ? mapper.toICalendarTodoText(entry)
-        : mapper.toICalendarText(entry);
+        : mapper.toICalendarText(entry, appleSidechannel);
 
     String newEtag = EntryMapper.readEtag(entry)
         .map(etag -> targetClient.putUpdate(target, body, etag))
@@ -330,6 +335,30 @@ public final class CalendarService implements HasLogger {
    * {@code uri} — falls back to {@link #primary} when nothing
    * matches (e.g. a brand-new event with no explicit target).
    */
+  /**
+   * BUG #7 helper: identifies Apple/iCloud CalDAV endpoints by
+   * hostname suffix. Catches every observed Apple URL pattern —
+   * {@code caldav.icloud.com}, {@code p124-caldav.icloud.com},
+   * {@code p-prod-caldav.icloud.com}, etc. — without false
+   * positives because no other CalDAV provider sits on a
+   * {@code *.icloud.com} hostname.
+   *
+   * <p>Used by {@link #save(Entry, URI)} to gate the DESCRIPTION
+   * sidechannel marker on. Non-Apple providers preserve RFC-7986
+   * {@code COLOR} correctly and don't need the marker; emitting
+   * it for them would show up as visible noise in their UI.
+   *
+   * <p>Public + static so callers (tests, future providers) can
+   * reuse the detection without reinstantiating the service.
+   */
+  public static boolean isAppleProviderUri(URI uri) {
+    if (uri == null) return false;
+    String host = uri.getHost();
+    if (host == null) return false;
+    host = host.toLowerCase(java.util.Locale.ROOT);
+    return host.equals("icloud.com") || host.endsWith(".icloud.com");
+  }
+
   private CalDavClient pickClient(URI uri) {
     if (uri == null) return primary;
     for (CalDavClient c : readClients) {

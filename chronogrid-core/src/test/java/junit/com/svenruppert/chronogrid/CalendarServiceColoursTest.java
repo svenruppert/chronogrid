@@ -27,7 +27,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Contract for {@link CalendarService#applyColours(Entry, String)} —
@@ -174,5 +176,47 @@ class CalendarServiceColoursTest {
 
     assertEquals(CALENDAR_COLOR, entry.getColor(),
         "Empty subscription map must not touch the entry");
+  }
+
+  // ── BUG #7: Apple-provider URI detection ──────────────────────
+
+  @Test
+  @DisplayName("isAppleProviderUri recognises every observed iCloud URL pattern")
+  void appleProviderRecognised() {
+    assertTrue(CalendarService.isAppleProviderUri(
+        URI.create("https://caldav.icloud.com/")),
+        "caldav.icloud.com is Apple's discovery entry-point");
+    assertTrue(CalendarService.isAppleProviderUri(
+        URI.create("https://p124-caldav.icloud.com:443/270995419/calendars/CAL/")),
+        "Per-pod caldav hosts (p124-, p-prod-, …) are Apple too");
+    assertTrue(CalendarService.isAppleProviderUri(
+        URI.create("https://p-prod-caldav.icloud.com/foo/")),
+        "Production-pod variants must match");
+    assertTrue(CalendarService.isAppleProviderUri(
+        URI.create("https://ICLOUD.COM/")),
+        "Match is case-insensitive on hostname");
+  }
+
+  @Test
+  @DisplayName("isAppleProviderUri rejects every non-Apple CalDAV URL")
+  void nonAppleProvidersIgnored() {
+    assertFalse(CalendarService.isAppleProviderUri(
+        URI.create("https://nx93157.your-storageshare.de/remote.php/dav/calendars/foo/")),
+        "Nextcloud must NOT match — it preserves RFC-7986 COLOR");
+    assertFalse(CalendarService.isAppleProviderUri(
+        URI.create("https://baikal.example.com/cal/")));
+    assertFalse(CalendarService.isAppleProviderUri(
+        URI.create("https://google.com/calendar/")),
+        "Other big providers must not be misidentified");
+    assertFalse(CalendarService.isAppleProviderUri(
+        URI.create("https://my-icloud-mirror.example.com/")),
+        "Hosts that only LOOK like icloud must not match (suffix check, not substring)");
+  }
+
+  @Test
+  @DisplayName("isAppleProviderUri tolerates null / hostless URIs")
+  void appleProviderEdgeCases() {
+    assertFalse(CalendarService.isAppleProviderUri(null));
+    assertFalse(CalendarService.isAppleProviderUri(URI.create("/relative/path")));
   }
 }
