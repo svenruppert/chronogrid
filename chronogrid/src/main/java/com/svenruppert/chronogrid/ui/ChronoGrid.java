@@ -1216,6 +1216,24 @@ public class ChronoGrid extends Composite<VerticalLayout>
   // ── state-store-backed config helpers ──────────────────────────
 
   private static CalendarService resolveInitialService(CalendarStateStore store) {
+    // BUG #4 fix: multi-server state lives in
+    // readSubscriptions() + readServers(); the legacy single-server
+    // state lives in readConnection(). When the user has more than
+    // one server connected, only the multi-server state is
+    // authoritative — readConnection() ends up reflecting just the
+    // most-recently-applied connection. Re-mounting the ChronoGrid
+    // (new UI instance via route navigation, F5, re-login) was
+    // therefore rebuilding the service with only ONE client while
+    // visibleUris() correctly enumerated the full subscription set
+    // — the other calendars never got queried.
+    //
+    // Restore multi-server state first; fall back to the legacy
+    // single-connection path; final fallback is the preset default.
+    java.util.List<CalendarSubscription> subs = store.readSubscriptions();
+    if (!subs.isEmpty()) {
+      return CalendarService.fromConnections(
+          store.readServers(), subs, ZoneId.systemDefault());
+    }
     return store.readConnection()
         .map(cfg -> CalendarService.fromConfig(cfg, ZoneId.systemDefault()))
         .orElseGet(ChronoGrid::defaultServiceFromPreset);

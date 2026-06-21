@@ -432,7 +432,7 @@ SpotBugs + Diagnose-Lauf, plus dritten Browser-Smoke-Test.
 > der einen bunten Balken hat, friert die Anwendung ein und ich
 > muss ein Pagereload machen.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** ✅ behoben 2026-06-21 in `e4302f4` (MutationObserver attributeFilter + Re-Entrancy-Guard). Sven-verifiziert: Klick auf farbigen Tag schließt das Popover, App reagiert wieder.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -548,65 +548,78 @@ verlassen uns auf die manuelle Verifikation.
 > dann bringt ein Re-Load nichts mehr - Alle Termine weg in der
 > UI.
 
-**Status:** 🟡 erfasst — Hypothesen vorhanden, brauche Server-Log nach Reload-Klick zur Bestätigung
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-21
 
 ### Analyse
 
-Brauche noch Daten zur sicheren Diagnose, aber mehrere
-Bruchstellen sind denkbar. Drei wahrscheinlichste Pfade,
-sortiert nach Plausibilität basierend auf bisherigen Logs:
+Ursache durch Diagnose-Logger (BUG#4 DIAG) eindeutig
+identifiziert. Die ursprünglichen drei Hypothesen waren alle
+falsch — die tatsächliche Bruchstelle ist eine **Inkonsistenz
+zwischen zwei parallel laufenden Connection-State-Modellen** in
+`CalendarStateStore`:
 
-**Hypothese A — Discovery-State-Verlust bei Reload.** In den
-früheren Logs sehe ich:
+| State-Modell | API | Inhalt |
+|---|---|---|
+| Legacy single-server | `readConnection()` | EINE CalDavConnectionConfig (URI + Auth + optional `additionalCollections` aus *einer* Discovery) |
+| Multi-server | `readServers()` + `readSubscriptions()` | N CalDavServerConnections + N CalendarSubscriptions |
+
+Im Smoke-Test-Log sah man die Mismatch nach UI-Remount glasklar:
 
 ```
-CalendarService ready: primary=https://caldav.icloud.com/ readClients=1
-  ↓ Discovery
-Discovery step 3: found 6 calendar(s) under https://p124-caldav.icloud.com:443/...
-CalendarService ready: primary=https://p124-caldav.icloud.com:443/.../ readClients=2
+[BUG#4 DIAG] fetched=1 visibleSet=[nx93157, CAL2, CAL1]
+   sampleHref=https://nx93157.../personal/170...ics
+CalendarService ready: primary=https://nx93157.../personal/ readClients=1
 ```
 
-Initial ist nur die Legacy-Primary-URI (`caldav.icloud.com`) als
-Client da; die liefert HTTP 403. Erst Discovery erweitert auf
-die echten Per-Kalender-URIs. Wenn ein Reload-Klick die
-Discovery-State zurücksetzt aber nicht neu triggert, hätten wir
-wieder readClients=1 mit 403 → keine Entries → UI leer.
-**Wahrscheinlichkeit: hoch.**
+- Der CalendarService hatte nur **einen** Client (`readClients=1`,
+  primary=nx93157).
+- Der Visibility-Filter (`visibleUris()`) listete aber **drei**
+  URIs (Nextcloud + zwei iCloud-Kalender).
+- Folge: Nur Termine aus dem einen Service-Client kamen rein,
+  die anderen wurden gar nie abgefragt. Im Multi-Cal-Setup
+  hieß das: alles bis auf den zuletzt verbundenen Server weg.
 
-**Hypothese B — `visibleUris()` Logik filtert alle Subscriptions
-weg.** In `ChronoGrid#visibleUris` (Zeile 1280):
+**Root Cause:** `ChronoGrid.resolveInitialService(store)` baut den
+Service ausschließlich aus `store.readConnection()`:
 
 ```java
-if (subs.isEmpty()) return null;       // null = "no filter" - alle durchlassen
-Set<URI> out = new HashSet<>();
-for (CalendarSubscription cs : subs) {
-    if (cs.visible()) out.add(cs.uri());
+private static CalendarService resolveInitialService(CalendarStateStore store) {
+    return store.readConnection()
+        .map(cfg -> CalendarService.fromConfig(cfg, ZoneId.systemDefault()))
+        .orElseGet(ChronoGrid::defaultServiceFromPreset);
 }
-return out;
 ```
 
-Wenn nach Reload alle Subscriptions als `visible=false` markiert
-sind (z.B. weil eine Re-Initialization sie default-unsichtbar
-setzt), kommt ein **leeres Set** zurück (nicht null!) und der
-Filter in `rangeWithStatus` (Zeile 687–700) wirft alle Entries
-raus. **Wahrscheinlichkeit: mittel.**
+`store.readConnection()` reflektiert nur die zuletzt-applizierte
+Single-Server-Connection. Multi-Server-State (`readServers` +
+`readSubscriptions`) wird ignoriert. Auf jedem UI-Remount
+(Route-Navigation zurück zu Calendar, F5, neue Vaadin-UI) wird der
+Service damit auf 1 Client kollabiert.
 
-**Hypothese C — Auth/Session-Verlust bei Reload.** Reload triggert
-ein UI-Rebuild, der CalendarService wird neu konstruiert, aber
-ohne die korrekten App-Specific-Passwords aus dem State. Folge:
-alle Clients geben 401/403 zurück. Im Log wäre das sichtbar als
-HTTP-Status-Lines pro Client. **Wahrscheinlichkeit: mittel.**
+`rebuildServiceFromSubscriptions()` (die multi-server-aware
+Methode) wird nur auf Subscription-Apply / Subscription-Remove
+aufgerufen, nicht auf UI-Mount.
 
-**Verifikation:** Sven, falls du den Bug reproduzieren willst —
-machen, dann Server-Log auf die Sequenz von Lines unmittelbar
-nach dem Reload-Click hier reinpasten:
-- `CalendarService ready: …` Zeilen (zeigt readClients)
-- `REPORT VEVENT … -> N entries` oder `-> HTTP …` (zeigt
-  Fetch-Resultat)
-- `fanOut across N client(s) produced X entries total`
-- `visibleUris` falls relevant — kann ich ad-hoc-Logger
-  hinzufügen wenn die obigen nicht reichen
+**Fix:** `resolveInitialService` muss zuerst auf den Multi-Server-
+State prüfen und dann auf den Legacy-State fallen:
+
+```java
+private static CalendarService resolveInitialService(CalendarStateStore store) {
+    List<CalendarSubscription> subs = store.readSubscriptions();
+    if (!subs.isEmpty()) {
+        return CalendarService.fromConnections(
+            store.readServers(), subs, ZoneId.systemDefault());
+    }
+    return store.readConnection()
+        .map(cfg -> CalendarService.fromConfig(cfg, ZoneId.systemDefault()))
+        .orElseGet(ChronoGrid::defaultServiceFromPreset);
+}
+```
+
+Dabei ist `fromConnections` die existierende Multi-Server-Factory
+(Zeile 126 in `CalendarService`) — die Logik braucht keine
+Erweiterung, nur den richtigen Einstiegspunkt auf UI-Mount.
 
 ### Betroffene Features
 
@@ -628,33 +641,41 @@ nach dem Reload-Click hier reinpasten:
 **Erwartet:** Reload re-fetcht die Termine aus allen
 konfigurierten Subscriptions; UI zeigt sie wieder an.
 
-### Touchpoints (vermutet)
+### Touchpoints
 
-- `chronogrid: ui/ChronoGrid.java#refresh-Button-Handler`
-  (Zeile 383–389) — ruft `calendar.getEntryProvider().refreshAll()`
-- `chronogrid: ui/ChronoGrid.java#visibleUris` (Zeile 1280) — wenn
-  Hypothese B
-- `chronogrid: ui/ChronoGrid.java#rangeWithStatus` (Zeile 660+) —
-  Fetch + Filter-Pipeline
-- `chronogrid-core: service/CalendarService.java#fanOut` — wenn
-  Hypothese A/C
-- `chronogrid-core: client/CalDavDiscovery.java` — wenn Hypothese A
+- `chronogrid: ui/ChronoGrid.java#resolveInitialService` (~Zeile
+  1218) — **Bug-Stelle**: las nur `readConnection()`, nicht
+  `readSubscriptions()`. Fix: erst Multi-Server-State prüfen.
+- `chronogrid-core: service/CalendarService.java#fromConnections`
+  (Zeile 126 ff.) — Multi-Server-Factory, war schon korrekt
+  vorhanden, wurde aber von `resolveInitialService` nicht
+  angesteuert.
+- `chronogrid: ui/ChronoGrid.java#rebuildServiceFromSubscriptions`
+  (~Zeile 1379) — wurde auf Subscription-Änderungen aufgerufen
+  und arbeitet schon richtig; bleibt unverändert.
 
 ### Größe
 
-Unbekannt bis Ursache eindeutig. Wenn Hypothese A → M (Discovery-
-State-Persistenz zwischen Reloads). Wenn B → S (`visible()`-Default
-korrigieren). Wenn C → M (Auth-State-Management). Erste Klärung
-braucht Log-Dump nach Reload-Klick.
+S. Eine Methode (~5 Zeilen) ergänzt um eine Multi-Server-
+Vorab-Prüfung. Geschätzt 15 Minuten inkl. Diagnose-Cleanup +
+SpotBugs.
 
 ### Risiko / offene Fragen
 
-- **Reproduzierbarkeit unsicher.** Tritt der Bug bei jedem
-  Reload auf oder nur unter bestimmten Bedingungen (z.B. nur
-  nach Auth-Refresh, nur nach Subscriptions-Dialog-Eingriff)?
-- **Multi-Account-Frage:** sind die „mehr als einen Kalender"
-  zwei iCloud-Accounts oder zwei Kalender desselben Accounts?
-  Macht Diagnose unterschiedlich.
+- **Tag-Universe wird auf UI-Remount erst nach erstem Fetch neu
+  aufgebaut.** Subscriptions-State bleibt erhalten (per
+  Session-Attribut), aber das in `tagUniverse` gesammelte
+  Tag-Set startet leer und wächst beim nächsten Fetch. Cosmetisch
+  — Tag-Filter zeigt initial keine Tags bis der erste
+  fanOut-Pass durch ist. Akzeptabel.
+- **Diagnose-Logger entfernt.** Die `[BUG#4 DIAG]`-Zeile im
+  `rangeWithStatus` war ein temporäres Diagnose-Werkzeug und
+  wird mit dem Fix-Commit entfernt.
+- **Persistenz-Trade-off:** Multi-Server-State (Subscriptions +
+  Servers) lebt nur in der Vaadin-Session. Browser-Cookie-Reload
+  oder Session-Timeout bringt alles zurück auf den Legacy-Pfad.
+  Folge-Erweiterung: persistente Speicherung in
+  `AppStoragePaths` als JSON. Nicht für diesen Fix.
 
 ---
 
@@ -767,3 +788,253 @@ Add-on inspizieren (M, 30–60 min).
   ignoriert, müssen wir per `eventDidMount`-Callback (JS) das
   background per Inline-Style aufzwingen. Nicht-trivial, ähnlich
   wie der Popover-Walker in Feature #5.
+
+
+---
+
+## #6 — Verbindungsmanagement-UX ungenügend: hinzufügen + entfernen muss intuitiver werden
+
+> **Original:** Das Verbindungsmanagement ist ungenügend. Es muss
+> intuitiv sein eine neue Verbindung herzustellen und eine zu
+> entfernen.
+
+**Status:** 🟡 erfasst — UX-Anforderung, braucht Konkretisierung
+**Filed:** 2026-06-21
+
+### Analyse
+
+Sven beschreibt das Problem auf UX-Ebene, nicht auf Code-Ebene.
+Die aktuellen Touchpoints sind drei Dialoge in der Toolbar:
+
+- **Settings** (`openSettingsDialog`) — Single-Connection-Editor
+  für die Legacy `CalDavConnectionConfig`. Nutzt das alte
+  Single-Server-Modell.
+- **Connections** (`openConnectionsDialog`, `ConnectionsDialog`) —
+  Multi-Server-Liste. Anlegen einer neuen Server-Connection
+  inkl. Discovery + Auth.
+- **Subscriptions** (`openSubscriptionsDialog`,
+  `SubscriptionsDialog`) — Liste der abonnierten Kalender pro
+  Server, Visibility + Farb-Override.
+
+Das ist effektiv ein **drei-Dialog-Workflow** für einen Vorgang
+den der User als „eine Verbindung hinzufügen" wahrnimmt:
+
+1. Connections-Dialog öffnen → neuen Server anlegen (URL, User,
+   Passwort, Discovery startet) → Server-Eintrag fertig.
+2. Subscriptions-Dialog öffnen → Kalender vom neuen Server
+   einzeln aktivieren → endlich sieht man Termine.
+
+Außerdem: ein **vierter** historischer Pfad (Settings-Dialog für
+die Legacy-Single-Connection) existiert daneben — Quelle der
+Verwirrung und auch der Auslöser für BUG #4 (zwei parallel
+laufende State-Modelle).
+
+**Konkrete UX-Probleme** (vermutet, basierend auf der Architektur
+und den BUG-Berichten der letzten Stunden):
+
+1. **Zwei State-Modelle nebeneinander** (Legacy `Connection` +
+   Multi-Server `Subscriptions`). Verschwindet implizit für den
+   User, aber führt zu inkonsistentem Verhalten (siehe BUG #4).
+2. **Add-Pfad nicht ein-klick.** Aktuell: Connections-Dialog →
+   Server hinzufügen → Discovery warten → Subscriptions-Dialog
+   → Kalender einzeln aktivieren. Wenig Geleit.
+3. **Entfernen-Pfad nicht intuitiv.** Subscription entfernen
+   räumt die Subscription weg, aber wenn das der letzte Kalender
+   eines Servers war, bleibt der Server-Eintrag. `pruneOrphan
+   Servers()` exists, aber UX-mäßig nicht klar.
+4. **Status-Anzeige** der einzelnen Verbindungen ist über
+   `ServerStatusList` da, aber nicht stark mit dem Add-/Remove-
+   Flow gekoppelt.
+
+**Mögliche Lösungsrichtung** (sehr offen, braucht Designgespräch):
+
+- **Ein einziger „Connection Manager"-Dialog** mit Liste aller
+  Server + integrierten Pro-Server-Subscription-Cards.
+- **Wizard für „neue Verbindung"**: 1. URL eingeben → 2.
+  Credentials → 3. Kalender aus Discovery aktivieren →
+  Direkt-Fertig.
+- **Legacy `readConnection()`-Pfad endgültig deprecaten** sobald
+  alle Caller auf `readSubscriptions()` umgestellt sind.
+- **„Remove server"-Button räumt alles auf** (Server, deren
+  Subscriptions, deren lokal-gestapelten Farben aus dem BUG-#2
+  Store) — atomare Operation aus User-Sicht.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1, #2, #3, #4, #5, #6** — UX des Connection-
+  Managements ist eine Vorbedingung für alle Features. Wenn der
+  User die Verbindung nicht zuverlässig herstellen kann, hilft
+  kein Feature.
+- **Indirekt verwandt mit BUG #4** — der Legacy-Pfad war Ursache
+  von BUG #4. Eine konsequente Migration weg vom Legacy-Pfad
+  würde solche Konsistenz-Probleme strukturell ausschließen.
+
+### Reproduktion
+
+Subjektiv. Sven berichtet generell: das Hinzufügen + Entfernen
+fühlt sich nicht intuitiv an. Konkrete Friction-Points während
+des Test-Setups dieser Session erkennbar im Log:
+
+- Mehrere `CalendarService ready`-Lines mit wechselnden
+  `readClients` als der User Connections + Subscriptions
+  umkonfigurierte.
+- Mehrere `Discovery start`-Sequenzen nacheinander.
+- Inkonsistenz zwischen sichtbaren Subscriptions und
+  tatsächlich gequerten Clients (BUG #4).
+
+### Touchpoints (Erkundung)
+
+- `chronogrid: ui/ConnectionsDialog.java` — UI für Server-Liste
+- `chronogrid: ui/SubscriptionsDialog.java` — UI für Subscription-
+  Liste pro Server
+- `chronogrid: ui/ChronoGrid.java#openSettingsDialog` — Legacy
+  Single-Connection-Editor (Kandidat für Deprecation)
+- `chronogrid: ui/ChronoGrid.java#pruneOrphanServers` —
+  Aufräum-Routine die schon existiert
+- `chronogrid-core: client/CalDavDiscovery.java` — der
+  Discovery-Schritt, der eine User-friendliche Auswahl-UI
+  bekommen sollte
+
+### Größe
+
+L. Echte UX-Überarbeitung mit Wizard- oder Single-Dialog-Design.
+Eher 2–4 Tage Implementierung + Smoke-Tests + Tests.
+
+Empfehlung: **erst BUG #5 + #7 fixen** (kleinere, gezieltere
+Fixes), DANACH den Connection-Manager als ein eigenes Feature in
+`Feature-Planning.md` umarbeiten (als „Connection-Manager UX-
+Refresh") mit echtem Konzept- und Design-Schritt.
+
+### Risiko / offene Fragen
+
+- **Konkrete User-Story fehlt.** „Intuitiv" ist nicht
+  spezifizierbar. Sven sollte beschreiben: welche konkrete Aktion
+  fühlt sich falsch an? (Bsp: „ich klicke auf Settings, sehe
+  einen Connection-Editor, aber die Termine kommen nicht — weil
+  ich auch Subscriptions aktivieren muss.")
+- **Migrations-Pfad nötig.** Bestehende User mit
+  `readConnection()`-State müssen automatisch auf den Multi-
+  Server-State portiert werden. Risiko: Daten-Verlust beim
+  Upgrade.
+- **Vermutlich gehört das eigentlich nach `Feature-Planning.md`.**
+  Ein UX-Refresh ist eher ein Feature als ein Bug — sobald die
+  Anforderung konkretisiert ist, vorschlag den Eintrag dorthin
+  zu migrieren.
+
+---
+
+## #7 — Per-Event-Farbe: DESCRIPTION-Marker nur für iCloud, reguläre COLOR-Property bei anderen Providern
+
+> **Original:** Nur bei iCloud soll die Farbe als Description
+> Attribut gespeichert werden. Bei den anderen wie z.B.
+> NextCloud wieder als reguläres Attribut, so dass man die Farbe
+> dann auch in NextCloud sieht.
+
+**Status:** 🔬 analysiert
+**Filed:** 2026-06-21
+
+### Analyse
+
+Folge-Forderung zu BUG #2's Hybrid-Fix. Aktuell schreibt der
+`EntryMapper.toICalendarText` für **jeden** Termin mit eigener
+Farbe **beide** Speicher-Pfade:
+
+1. `COLOR:#ff0000` (RFC-7986-Property)
+2. `[chronogrid-color: #ff0000]`-Marker am Ende der DESCRIPTION
+
+Das ist Apple-resilient (BUG #2's Hauptmotivation), aber
+**verschmutzt die DESCRIPTION für Provider, die `COLOR` korrekt
+round-trippen**. Bei Nextcloud / Baikal / Radicale sehen User die
+Marker-Zeile in der DESCRIPTION jedes Termins — unnötig.
+
+Sven's Wunsch: bei **Apple/iCloud** Marker einsetzen (Workaround
+nötig), bei **anderen Providern** weglassen (Standard-COLOR
+reicht und ist in deren UI sichtbar).
+
+**Mögliche Erkennungs-Strategien:**
+
+1. **URI-Pattern-basiert** — Apple-CalDAV-URLs enthalten
+   typischerweise `caldav.icloud.com` oder
+   `p[0-9]+-caldav.icloud.com`. Beim Write den Target-Client
+   prüfen.
+2. **Header-basiert** — Apple's CalDAV-Server gibt einen
+   `Server`- oder `DAV`-Header zurück, der Apple identifiziert.
+   Beim Initial-Connect cachen.
+3. **Konfig-flag pro Subscription** — der User markiert die
+   Subscription als „Apple-resilient" (oder das Apple-iCloud-
+   Preset setzt es default-an).
+4. **Probe-Mechanismus** — eine Test-PUT mit Marker schreiben,
+   wieder lesen, prüfen ob Marker noch da ist. Aufwändig +
+   Round-trip-Kosten.
+
+Empfehlung: **Strategie 1 (URI-Pattern)** als pragmatischer
+Schnell-Fix. Regex-Match auf `caldav.icloud.com|*.icloud.com`
+beim Schreiben aus dem `targetClient.collectionUri()`. Wenn
+match → Marker schreiben, sonst weglassen.
+
+**Reader-Pfad bleibt unverändert** — er liest weiterhin COLOR
+und fällt auf den Marker zurück. Falls auf einem nicht-iCloud-
+Provider trotzdem mal ein Marker steht (Legacy-Daten aus der
+Hybrid-Phase), wird er korrekt geparst und gestrippt.
+
+**Architektur-Implikation:** `EntryMapper.toICalendarText(Entry)`
+braucht entweder einen zusätzlichen `boolean
+applyAppleSidechannel` Parameter, oder einen Predicate-Funktion.
+Sauberer Schnitt: Caller (CalendarService.save) entscheidet,
+basierend auf dem `targetClient.collectionUri()`.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1** — *Per-event colour with a
+  calendar-coloured edge stripe*: Acceptance-Signals erweitern um
+  „bei nicht-Apple-Providern wird der Marker NICHT geschrieben".
+- **Bezug zu BUG #2** — der Marker als Apple-Workaround wird
+  hier auf seinen tatsächlichen Use-Case verengt. Lokaler Per-
+  UID-Store bleibt als Absicherung relevant für Apple.
+
+### Reproduktion
+
+1. App mit Nextcloud verbunden.
+2. Termin mit eigener Farbe in unserer App speichern.
+3. Im Nextcloud-Web-UI denselben Termin öffnen.
+4. **Tatsächlich:** DESCRIPTION-Feld zeigt `[chronogrid-color:
+   #ff0000]` am Ende. User sieht die Marker-Zeile als
+   überflüssige Notiz.
+5. **Erwartet:** DESCRIPTION zeigt nur den User-Text; die Farbe
+   ist über die normale `COLOR`-Property abrufbar (Nextcloud's
+   UI sollte sie korrekt anzeigen — sofern Nextcloud RFC-7986
+   `COLOR` unterstützt).
+
+### Touchpoints
+
+- `chronogrid-core: mapping/EntryMapper.java#toICalendarText` —
+  Marker-Write-Pfad bedingt machen, abhängig von einem neuen
+  Parameter
+- `chronogrid-core: service/CalendarService.java#save` —
+  Entscheidet basierend auf `targetClient.collectionUri()`
+  ob Apple-Marker oder nicht
+- `chronogrid-core: client/CalDavClient.java` — ggf.
+  `isAppleProvider()`-Helper hinzufügen
+- `chronogrid-core: test/EntryMapperColourSidechannelTest.java`
+  + neuer Test für den Apple-vs-non-Apple-Switch
+
+### Größe
+
+S. Eine Parameter-Erweiterung in `toICalendarText`, eine
+URI-Pattern-Erkennung in `CalendarService.save`, 2 neue Tests.
+Geschätzt 30 Minuten.
+
+### Risiko / offene Fragen
+
+- **Provider-Erkennung anhand der URI ist brüchig.** Wenn iCloud
+  irgendwann die Domain ändert oder ein User eine Custom-DNS-
+  Proxy-Lösung benutzt, schlägt die Erkennung fehl. Pragmatisch:
+  Apple-Domain-Pattern reicht für 99% der Fälle.
+- **Verifikation, dass Nextcloud `COLOR` tatsächlich anzeigt.**
+  Müsste Sven kurz im Nextcloud-Web-UI prüfen — wenn Nextcloud
+  COLOR ebenfalls ignoriert, wird der Fix die Farbe schlechter
+  sichtbar machen. Aber die Vorfrage ist legitim: zeigt
+  Nextcloud die COLOR-Property überhaupt im UI an?
+- **Cross-Migration:** wenn ein User einen Termin aus iCloud nach
+  Nextcloud kopiert, kommt der Marker mit. Reader strippt ihn,
+  aber Nextcloud-User sieht ihn temporär. Akzeptabel.
