@@ -77,6 +77,8 @@ public final class EventEditorDialog
   private static final String K_FIELD_COLOR_USE = "calendar.field.color.use";
   private static final String K_FIELD_COLOR_RESET = "calendar.field.color.reset";
   private static final String K_FIELD_COLOR_HINT = "calendar.field.color.hint";
+  private static final String K_FIELD_TAGS = "calendar.field.tags";
+  private static final String K_FIELD_TAGS_HINT = "calendar.field.tags.hint";
   private static final String K_FIELD_START = "calendar.field.start";
   private static final String K_FIELD_END = "calendar.field.end";
   private static final String K_FIELD_CALENDAR = "calendar.field.calendar";
@@ -209,12 +211,22 @@ public final class EventEditorDialog
     Div colourBlock = new Div(colourRow, colourHint);
     colourBlock.getStyle().set("width", "100%");
 
+    // Tags input (Feature #3): free-form comma-separated, normalised
+    // on save. The tag universe is harvested across the grid; this
+    // field is the entry-point for new tags joining the universe.
+    TextField tagsField = new TextField(messages.tr(K_FIELD_TAGS, "Tags"));
+    java.util.Set<String> initialTags = EntryMapper.readTags(entry);
+    tagsField.setValue(String.join(", ", initialTags));
+    tagsField.setWidthFull();
+    tagsField.setHelperText(messages.tr(K_FIELD_TAGS_HINT,
+        "Comma-separated, e.g. work, client-acme, deep-focus"));
+
     VerticalLayout form = new VerticalLayout();
     form.setPadding(false);
     form.setSpacing(true);
     if (serverFilter != null) form.add(serverFilter);
     if (calendarSelect != null) form.add(calendarSelect);
-    form.add(title, description, location, url, start, end, colourBlock);
+    form.add(title, description, location, url, start, end, colourBlock, tagsField);
     dialog.add(form);
 
     final Select<CalendarSubscription> calendarSelectFinal = calendarSelect;
@@ -232,6 +244,7 @@ public final class EventEditorDialog
       }
       if (start.getValue() != null) entry.setStart(start.getValue());
       if (end.getValue() != null) entry.setEnd(end.getValue());
+      EntryMapper.writeTags(entry, splitTags(tagsField.getValue()));
       URI target = calendarSelectFinal != null && calendarSelectFinal.getValue() != null
           ? calendarSelectFinal.getValue().uri()
           : null;
@@ -375,5 +388,21 @@ public final class EventEditorDialog
       return trimmed;
     }
     return "#1f77b4";
+  }
+
+  /**
+   * Splits a comma-separated tag input into an ordered set. The
+   * underlying {@link EntryMapper#writeTags} normalises (trim +
+   * lower-case) and drops blanks, so this method does not have to
+   * defensively clean up the values.
+   */
+  private static java.util.Set<String> splitTags(String raw) {
+    if (raw == null || raw.isBlank()) return java.util.Set.of();
+    java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+    for (String part : raw.split(",")) {
+      String trimmed = part.trim();
+      if (!trimmed.isEmpty()) out.add(trimmed);
+    }
+    return out;
   }
 }

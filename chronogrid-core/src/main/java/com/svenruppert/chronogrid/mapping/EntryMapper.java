@@ -50,6 +50,7 @@ import biweekly.io.TimezoneAssignment;
 import biweekly.property.DateDue;
 import biweekly.property.DateEnd;
 import biweekly.property.DateStart;
+import biweekly.property.Categories;
 import biweekly.property.Uid;
 import biweekly.util.ICalDate;
 import com.svenruppert.chronogrid.client.RemoteEvent;
@@ -101,6 +102,21 @@ public final class EntryMapper {
    * so the renderer can show entry-fill + calendar-border at once.
    */
   public static final String CUSTOM_ENTRY_COLOR = "caldavEntryColor";
+
+  /**
+   * Comma-separated, normalised list of user-assigned tags
+   * round-tripped through the iCalendar {@code CATEGORIES} property
+   * (RFC 5545 §3.8.1.2). Tags are stored lower-cased + trimmed in
+   * the custom property so cross-server equality is canonical; the
+   * original casing is lost on the wire because CalDAV servers
+   * (iCloud, Nextcloud, Radicale, Baïkal) treat CATEGORIES case-
+   * insensitively across providers and round-tripping the input
+   * casing would break filtering.
+   *
+   * <p>Empty / blank tags are dropped during normalisation; the
+   * custom property is absent (not "") when no tags are set.
+   */
+  public static final String CUSTOM_CATEGORIES = "caldavCategories";
 
   private final ZoneId displayZone;
 
@@ -158,6 +174,9 @@ public final class EntryMapper {
     Optional.ofNullable(vevent.getColor()).map(c -> c.getValue())
         .filter(s -> !s.isBlank())
         .ifPresent(s -> entry.setCustomProperty(CUSTOM_ENTRY_COLOR, s));
+
+    String tags = readCategories(vevent);
+    if (!tags.isEmpty()) entry.setCustomProperty(CUSTOM_CATEGORIES, tags);
 
     entry.setCustomProperty(CUSTOM_KIND, KIND_VEVENT);
     entry.setCustomProperty(CUSTOM_ETAG, remote.etag());
@@ -280,6 +299,8 @@ public final class EntryMapper {
     String entryColor = entry.getCustomProperty(CUSTOM_ENTRY_COLOR);
     if (entryColor != null && !entryColor.isBlank()) vevent.setColor(entryColor);
 
+    writeCategories(vevent, entry.getCustomProperty(CUSTOM_CATEGORIES));
+
     boolean allDay = Boolean.TRUE.equals(entry.isAllDay());
     String tzid = entry.getCustomProperty(CUSTOM_TZID);
     ZoneId zone = resolveZone(tzid);
@@ -372,5 +393,88 @@ public final class EntryMapper {
   static ICalDate utcIcalDate(LocalDateTime ldtUtc) {
     Instant instant = ldtUtc.toInstant(ZoneOffset.UTC);
     return new ICalDate(Date.from(instant), true);
+  }
+
+  // ── CATEGORIES (Feature #3 — tags) ────────────────────────────
+
+  /**
+   * Reads + normalises CATEGORIES from a VEVENT into a single
+   * comma-separated string of unique lower-cased tags. Returns ""
+   * when no CATEGORIES property is present or all values are blank.
+   */
+  static String readCategories(VEvent vevent) {
+    java.util.List<Categories> all = vevent.getCategories();
+    if (all == null || all.isEmpty()) return "";
+    java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+    for (Categories cat : all) {
+      for (String raw : cat.getValues()) {
+        String norm = normaliseTag(raw);
+        if (!norm.isEmpty()) out.add(norm);
+      }
+    }
+    return String.join(",", out);
+  }
+
+  /**
+   * Writes a comma-separated tag string back to a VEVENT as a single
+   * CATEGORIES property. Pass {@code null} or "" to clear; existing
+   * CATEGORIES instances are removed so the round-trip is lossless
+   * (no stale tags from prior writes).
+   */
+  static void writeCategories(VEvent vevent, String csv) {
+    vevent.removeProperties(Categories.class);
+    if (csv == null || csv.isBlank()) return;
+    Categories cat = new Categories();
+    for (String raw : csv.split(",")) {
+      String norm = normaliseTag(raw);
+      if (!norm.isEmpty()) cat.getValues().add(norm);
+    }
+    if (!cat.getValues().isEmpty()) vevent.addCategories(cat);
+  }
+
+  /**
+   * Public-API helper for callers (UI editor, filter logic) that want
+   * the canonical tag-set without re-implementing the trim+lower
+   * rules. Returns an empty set for absent / blank input.
+   */
+  public static java.util.Set<String> readTags(Entry entry) {
+    if (entry == null) return java.util.Set.of();
+    String raw = entry.getCustomProperty(CUSTOM_CATEGORIES);
+    if (raw == null || raw.isBlank()) return java.util.Set.of();
+    java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+    for (String t : raw.split(",")) {
+      String norm = normaliseTag(t);
+      if (!norm.isEmpty()) out.add(norm);
+    }
+    return out;
+  }
+
+  /**
+   * Companion writer to {@link #readTags(Entry)}. Pass {@code null}
+   * or empty set to clear the custom property; pass a populated set
+   * to normalise + persist. Order is preserved (LinkedHashSet
+   * semantics on the caller side leak through).
+   */
+  public static void writeTags(Entry entry, java.util.Set<String> tags) {
+    if (entry == null) return;
+    if (tags == null || tags.isEmpty()) {
+      entry.setCustomProperty(CUSTOM_CATEGORIES, null);
+      return;
+    }
+    java.util.LinkedHashSet<String> normalised = new java.util.LinkedHashSet<>();
+    for (String t : tags) {
+      String n = normaliseTag(t);
+      if (!n.isEmpty()) normalised.add(n);
+    }
+    if (normalised.isEmpty()) {
+      entry.setCustomProperty(CUSTOM_CATEGORIES, null);
+      return;
+    }
+    entry.setCustomProperty(CUSTOM_CATEGORIES, String.join(",", normalised));
+  }
+
+  private static String normaliseTag(String raw) {
+    if (raw == null) return "";
+    return raw.trim().toLowerCase(java.util.Locale.ROOT);
   }
 }

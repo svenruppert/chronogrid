@@ -47,6 +47,7 @@ import com.svenruppert.chronogrid.service.CalendarSubscription;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Per-user state the {@code ChronoGrid} keeps between navigations:
@@ -81,4 +82,22 @@ public interface CalendarStateStore {
   int readNDays(int fallback);
 
   void writeNDays(int n);
+
+  /**
+   * Feature #3 — cross-calendar tag filter. The set of tag values
+   * (normalised lower-case) the user has chosen in the toolbar
+   * filter. An entry passes the filter when its tags intersect this
+   * set; an empty set means "no filter" (every entry passes).
+   *
+   * <p>Default impls return the empty set and silently drop writes
+   * so existing {@code CalendarStateStore} implementations need no
+   * changes when the feature toggles to default-off in their host.
+   */
+  default Set<String> readTagFilter() {
+    return Set.of();
+  }
+
+  default void writeTagFilter(Set<String> tags) {
+    // no-op default — overridden by VaadinSessionCalendarStateStore
+  }
 }

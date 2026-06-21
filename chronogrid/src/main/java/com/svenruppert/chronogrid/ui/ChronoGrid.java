@@ -150,6 +150,8 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_TB_NEW = "calendar.toolbar.newEvent";
   private static final String K_TB_SUBSCRIPTIONS = "calendar.toolbar.subscriptions";
   private static final String K_TB_CONNECTIONS = "calendar.toolbar.connections";
+  private static final String K_TB_TAG_FILTER = "calendar.toolbar.tagFilter";
+  private static final String K_TB_TAG_FILTER_PLACEHOLDER = "calendar.toolbar.tagFilter.placeholder";
   private static final String K_NOTIFY_SUB_REMOVED = "calendar.notify.subscription.removed";
   private static final String K_NOTIFY_SUB_HIDDEN = "calendar.notify.subscription.hidden";
   private static final String K_NOTIFY_SUB_SHOWN = "calendar.notify.subscription.shown";
@@ -195,6 +197,13 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private transient Registration pollRegistration;
   private CalendarNavigationBar navigationBar;
   private transient CustomCalendarView[] nDaysCustomViews;
+  private com.vaadin.flow.component.combobox.MultiSelectComboBox<String> tagFilter;
+  // Universe of all tags seen since the last refresh. The combobox
+  // populates from this; growing/shrinking it triggers a setItems
+  // refresh on the combo. Synchronized — touched from background
+  // streams as well as from the UI thread.
+  private final java.util.NavigableSet<String> tagUniverse =
+      java.util.Collections.synchronizedNavigableSet(new java.util.TreeSet<>());
 
   public ChronoGrid() {
     this(new VaadinSessionCalendarStateStore());
@@ -383,8 +392,36 @@ public class ChronoGrid extends Composite<VerticalLayout>
         VaadinIcon.PLUS.create(), e -> openNewEventEditor());
     newEvent.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
 
+    // Tag filter (Feature #3): multi-select combobox. Items are
+    // populated from the running tag universe; selecting one or
+    // more tags filters the calendar grid across all subscriptions.
+    tagFilter = new com.vaadin.flow.component.combobox.MultiSelectComboBox<>(
+        messages.tr(K_TB_TAG_FILTER, "Filter by tag"));
+    tagFilter.setPlaceholder(messages.tr(K_TB_TAG_FILTER_PLACEHOLDER,
+        "Tags…"));
+    tagFilter.setId("calendar-toolbar-tag-filter");
+    tagFilter.setWidth("220px");
+    java.util.Set<String> savedFilter = stateStore.readTagFilter();
+    refreshTagUniverse();
+    if (!savedFilter.isEmpty()) {
+      // Make sure the persisted filter renders even if its tags have
+      // not yet been observed in the current grid range.
+      tagUniverse.addAll(savedFilter);
+      tagFilter.setItems(snapshotTagUniverse());
+      tagFilter.setValue(savedFilter);
+    }
+    tagFilter.addValueChangeListener(e -> {
+      java.util.Set<String> chosen = e.getValue() == null
+          ? java.util.Set.of()
+          : java.util.Collections.unmodifiableSet(
+              new java.util.LinkedHashSet<>(e.getValue()));
+      stateStore.writeTagFilter(chosen);
+      calendar.getEntryProvider().refreshAll();
+    });
+
     HorizontalLayout actions = new HorizontalLayout(
-        settings, connections, subscriptions, refresh, newEvent);
+        tagFilter, settings, connections, subscriptions, refresh, newEvent);
+    actions.setAlignItems(FlexComponent.Alignment.END);
     actions.setSpacing(true);
 
     HorizontalLayout bar = new HorizontalLayout(status, actions);
@@ -626,6 +663,14 @@ public class ChronoGrid extends Composite<VerticalLayout>
       if (!colorByCollection.isEmpty()) {
         stream = stream.peek(e -> applySubscriptionColor(e, colorByCollection));
       }
+      // Harvest tag universe on every fetch + apply the active
+      // tag filter (Feature #3). Universe grows monotonically until
+      // the next refreshAll.
+      stream = stream.peek(this::harvestTags);
+      java.util.Set<String> active = stateStore.readTagFilter();
+      if (!active.isEmpty()) {
+        stream = stream.filter(e -> matchesAnyTag(e, active));
+      }
       return stream;
     } catch (RuntimeException ex) {
       logger().info("findInRange failed against {}: {}",
@@ -649,6 +694,63 @@ public class ChronoGrid extends Composite<VerticalLayout>
       }
     }
     return out;
+  }
+
+  /**
+   * Harvests every tag carried by an Entry into the running
+   * {@link #tagUniverse}. The combobox setItems-refresh is debounced
+   * onto the UI thread via {@link com.vaadin.flow.component.UI#access};
+   * we only push when the universe actually grew.
+   */
+  private void harvestTags(Entry entry) {
+    java.util.Set<String> tags = com.svenruppert.chronogrid.mapping.EntryMapper
+        .readTags(entry);
+    if (tags.isEmpty()) return;
+    boolean grew;
+    synchronized (tagUniverse) {
+      int before = tagUniverse.size();
+      tagUniverse.addAll(tags);
+      grew = tagUniverse.size() != before;
+    }
+    if (grew) {
+      com.vaadin.flow.component.UI ui = com.vaadin.flow.component.UI.getCurrent();
+      if (ui != null && tagFilter != null) {
+        ui.access(() -> tagFilter.setItems(snapshotTagUniverse()));
+      }
+    }
+  }
+
+  private static boolean matchesAnyTag(Entry entry, java.util.Set<String> filter) {
+    java.util.Set<String> tags = com.svenruppert.chronogrid.mapping.EntryMapper
+        .readTags(entry);
+    if (tags.isEmpty()) return false;
+    for (String t : tags) {
+      if (filter.contains(t)) return true;
+    }
+    return false;
+  }
+
+  private java.util.List<String> snapshotTagUniverse() {
+    synchronized (tagUniverse) {
+      return java.util.List.copyOf(tagUniverse);
+    }
+  }
+
+  /**
+   * Refreshes the tag universe on demand — used on construction and
+   * after explicit grid refreshes. Walks the persisted filter so the
+   * combobox renders existing selections even before the next fetch
+   * round has surfaced their values.
+   */
+  private void refreshTagUniverse() {
+    java.util.Set<String> saved = stateStore.readTagFilter();
+    if (saved.isEmpty()) return;
+    synchronized (tagUniverse) {
+      tagUniverse.addAll(saved);
+    }
+    if (tagFilter != null) {
+      tagFilter.setItems(snapshotTagUniverse());
+    }
   }
 
   private static void applySubscriptionColor(Entry entry,

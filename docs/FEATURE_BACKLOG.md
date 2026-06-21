@@ -477,3 +477,92 @@ i18n keys: `calendar.nav.dayHint.none`, `calendar.nav.dayHint.one`,
   (`setMaxVisibleDots(int)`), but real-world usage rarely
   surpasses three active calendars per day — left as a tuning
   point.
+
+---
+
+## #6 — Per-entry tags + cross-calendar tag filter
+
+**Status:** ✅ shipped 2026-06-21 (see the commit body for the full
+implementation map)
+**Filed:** 2026-06-21
+
+### Idea
+
+Each calendar entry carries a free-form list of tags ("work",
+"client-acme", "deep-focus", …) round-tripped through the
+iCalendar `CATEGORIES` property (RFC 5545 §3.8.1.2). The toolbar
+gains a multi-select tag combobox that filters the visible entries
+**across every subscribed calendar at once** — the user can ask
+"show me every client-acme commitment regardless of which
+calendar holds it" and get a single, coherent answer.
+
+### Motivation
+
+Today the only cross-calendar lens the grid offers is "show all of
+them at once" or "hide a calendar entirely". Tags give a *third*
+dimension orthogonal to the calendar-source colour: one tag like
+`client-acme` can live across a personal calendar, a work
+calendar, and a family calendar — pre-existing rationale for the
+multi-subscription model. Filtering by tag answers the everyday
+"what's on my plate for X" question without the user manually
+juggling subscription visibility toggles.
+
+### Sketch
+
+Five-layer implementation, each layer freeze-conformant and tested:
+
+| Layer | Change |
+|---|---|
+| `EntryMapper` (core) | New `CUSTOM_CATEGORIES` constant; read+write CATEGORIES on VEVENT. Tags normalise to trim+lower-case so cross-server equality is canonical. Public helpers `readTags(Entry)` / `writeTags(Entry, Set<String>)`. |
+| `CalendarStateStore` (core) | New `default` methods `readTagFilter()` / `writeTagFilter(Set<String>)` returning empty set / no-op. Existing impls compile unchanged. |
+| `VaadinSessionCalendarStateStore` (component) | Overrides the two new methods, persisting to attribute `calendar.tagFilter` as a defensively-copied unmodifiable Set. |
+| `EventEditorDialog` (component) | New comma-separated `TextField` "Tags" with helper text. Value round-trips via `EntryMapper.writeTags` on Save. |
+| `ChronoGrid` (component) | New `MultiSelectComboBox` in the toolbar, populated from a running `tagUniverse: NavigableSet<String>` that harvests on every fetch. Selection writes through to the state store + triggers `refreshAll()`. Fetch-side filter (`matchesAnyTag`) applies inside `rangeWithStatus` so the filtered set is FullCalendar's source of truth, not a post-rendering DOM mask. |
+
+i18n: 4 new keys (`calendar.toolbar.tagFilter`,
+`calendar.toolbar.tagFilter.placeholder`, `calendar.field.tags`,
+`calendar.field.tags.hint`) in EN + DE.
+
+CSS: none — the components inherit Lumo defaults.
+
+### Acceptance signals
+
+- ✅ Saving an entry with `Work, client-acme` writes a single
+  `CATEGORIES:work,client-acme` line in the iCalendar body
+  (verified by `EntryMapperTagsTest#writesCategories`).
+- ✅ Reading the same iCalendar back populates
+  `EntryMapper.readTags(entry)` with `{work, client-acme}`
+  (verified by `EntryMapperTagsTest#parsesCategories`).
+- ✅ Clearing the tags input removes the `CATEGORIES` line entirely
+  (verified by `EntryMapperTagsTest#clearingTagsRemovesCategories`).
+- ✅ Selecting tags in the toolbar combobox filters the grid;
+  deselecting restores. Persists across navigations.
+- ✅ The tag universe grows monotonically as the user pans through
+  date ranges; tags only seen after a `refreshAll()` join the
+  combobox on the next fetch.
+- ✅ 293 tests green (213 demo + 75 core including 4 new + 5
+  component); `BugInstance size is 0` on both core and component.
+
+### Risks / open questions
+
+- **API surface widened on `CalendarStateStore`.** New default-no-op
+  methods preserve binary compat for external implementers, but
+  external consumers that want the feature must override both
+  methods. Migration documented in the BACKLOG and (when the
+  freeze lifts) in `CHANGELOG.md`.
+- **Case sensitivity is a normalisation choice.** Tags are
+  trim+lower-case on the wire and in storage. A user who writes
+  `Work` and another who writes `work` get the same tag — by
+  design, but it loses the original casing on round-trip. A future
+  v2 could store the first-seen casing as display label while
+  comparing case-insensitively. For v1 the simpler invariant wins.
+- **`MultiSelectComboBox` items snapshot.** The universe is held in
+  a synchronized `NavigableSet`; `setItems` runs through
+  `UI#access` only when the universe genuinely grew. No silent
+  truncation, no hidden cap — but with > 50 tags the combobox UX
+  degrades. Documented as a v2 tuning point.
+- **Tag editor is plain comma-separated text.** A future v2 could
+  use a `TagsField`-style component with autosuggest from the
+  current universe. v1 ships the simpler text input — the
+  underlying normalisation makes the input forgiving (extra
+  whitespace, case mixing, trailing commas all collapse cleanly).

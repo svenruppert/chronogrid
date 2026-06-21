@@ -46,6 +46,7 @@ public final class VaadinSessionCalendarStateStore
   public static final String SESSION_KEY_SUBSCRIPTIONS = "calendar.subscriptions";
   public static final String SESSION_KEY_SERVERS = "calendar.servers";
   public static final String SESSION_KEY_NDAYS = "calendar.nav.nDays";
+  public static final String SESSION_KEY_TAG_FILTER = "calendar.tagFilter";
 
   @Override
   public Optional<CalDavConnectionConfig> readConnection() {
@@ -120,5 +121,33 @@ public final class VaadinSessionCalendarStateStore
   public void writeNDays(int n) {
     VaadinSession session = VaadinSession.getCurrent();
     if (session != null) session.setAttribute(SESSION_KEY_NDAYS, n);
+  }
+
+  @Override
+  public java.util.Set<String> readTagFilter() {
+    VaadinSession session = VaadinSession.getCurrent();
+    if (session == null) return java.util.Set.of();
+    Object raw = session.getAttribute(SESSION_KEY_TAG_FILTER);
+    if (raw instanceof java.util.Set<?> set) {
+      java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+      for (Object o : set) {
+        if (o instanceof String s && !s.isBlank()) out.add(s);
+      }
+      return java.util.Collections.unmodifiableSet(out);
+    }
+    return java.util.Set.of();
+  }
+
+  @Override
+  public void writeTagFilter(java.util.Set<String> tags) {
+    VaadinSession session = VaadinSession.getCurrent();
+    if (session == null) return;
+    if (tags == null || tags.isEmpty()) {
+      session.setAttribute(SESSION_KEY_TAG_FILTER, null);
+      return;
+    }
+    java.util.LinkedHashSet<String> snapshot = new java.util.LinkedHashSet<>(tags);
+    session.setAttribute(SESSION_KEY_TAG_FILTER,
+        java.util.Collections.unmodifiableSet(snapshot));
   }
 }
