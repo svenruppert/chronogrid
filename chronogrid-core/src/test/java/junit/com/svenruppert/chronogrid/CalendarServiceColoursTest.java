@@ -22,7 +22,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.vaadin.stefan.fullcalendar.Entry;
 
+import java.net.URI;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
  * Contract for {@link CalendarService#applyColours(Entry, String)} —
@@ -89,5 +94,85 @@ class CalendarServiceColoursTest {
 
     assertEquals(CALENDAR_COLOR, entry.getColor(),
         "Whitespace-only CUSTOM_ENTRY_COLOR must not flip the entry into split mode");
+  }
+
+  // ── BUG #1: applySubscriptionOverride must preserve the
+  //    per-event fill / calendar-border split. The previous
+  //    ChronoGrid.applySubscriptionColor used to call
+  //    entry.setColor(subColour) directly, which collapsed fill
+  //    and border to the subscription colour and silently killed
+  //    any user-picked per-event colour.
+
+  private static final String SUB_COLOR = "#8C564B";
+
+  @Test
+  @DisplayName("applySubscriptionOverride splits fill + border when entry has own colour")
+  void subscriptionOverridePreservesPerEventFill() {
+    URI collectionUri = URI.create("https://caldav.example/u/sven/work/");
+    Entry entry = new Entry();
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, ENTRY_COLOR);
+    EntryMapper.writeHref(entry, collectionUri.resolve("meeting.ics"));
+
+    Map<URI, String> subColours = new LinkedHashMap<>();
+    subColours.put(collectionUri, SUB_COLOR);
+
+    CalendarService.applySubscriptionOverride(entry, subColours);
+
+    assertEquals(ENTRY_COLOR, entry.getBackgroundColor(),
+        "Fill must keep the user-picked CUSTOM_ENTRY_COLOR — BUG #1");
+    assertEquals(SUB_COLOR, entry.getBorderColor(),
+        "Border must take the user-picked subscription colour");
+    assertEquals(SUB_COLOR,
+        entry.getCustomProperty(CalendarService.CUSTOM_CALENDAR_COLOR),
+        "CUSTOM_CALENDAR_COLOR must reflect the subscription override "
+            + "so #5 popover dots and #4 strong-border CSS read the right value");
+  }
+
+  @Test
+  @DisplayName("applySubscriptionOverride collapses to subscription colour when no own colour")
+  void subscriptionOverrideUniformWithoutOwnColour() {
+    URI collectionUri = URI.create("https://caldav.example/u/sven/family/");
+    Entry entry = new Entry();
+    EntryMapper.writeHref(entry, collectionUri.resolve("trip.ics"));
+
+    Map<URI, String> subColours = new LinkedHashMap<>();
+    subColours.put(collectionUri, SUB_COLOR);
+
+    CalendarService.applySubscriptionOverride(entry, subColours);
+
+    assertEquals(SUB_COLOR, entry.getColor(),
+        "Without an own colour, fill + border collapse to the subscription colour");
+    assertEquals(SUB_COLOR,
+        entry.getCustomProperty(CalendarService.CUSTOM_CALENDAR_COLOR));
+  }
+
+  @Test
+  @DisplayName("applySubscriptionOverride is a no-op when the entry has no matching href")
+  void subscriptionOverrideNoMatch() {
+    URI knownUri = URI.create("https://caldav.example/u/sven/work/");
+    URI otherUri = URI.create("https://other.example/u/sven/work/");
+    Entry entry = new Entry();
+    entry.setColor("#444444");
+    EntryMapper.writeHref(entry, otherUri.resolve("meeting.ics"));
+
+    Map<URI, String> subColours = new LinkedHashMap<>();
+    subColours.put(knownUri, SUB_COLOR);
+
+    CalendarService.applySubscriptionOverride(entry, subColours);
+
+    assertNotEquals(SUB_COLOR, entry.getColor(),
+        "Non-matching subscription must not touch the entry's colour");
+  }
+
+  @Test
+  @DisplayName("applySubscriptionOverride is a no-op for an empty subscription map")
+  void subscriptionOverrideEmptyMap() {
+    Entry entry = new Entry();
+    entry.setColor(CALENDAR_COLOR);
+
+    CalendarService.applySubscriptionOverride(entry, Map.of());
+
+    assertEquals(CALENDAR_COLOR, entry.getColor(),
+        "Empty subscription map must not touch the entry");
   }
 }

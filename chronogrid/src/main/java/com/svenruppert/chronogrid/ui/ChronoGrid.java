@@ -480,7 +480,20 @@ public class ChronoGrid extends Composite<VerticalLayout>
         new java.util.HashMap<>();
     try {
       rangeWithStatus(fromDt, toDt).forEach(e -> {
-        String colour = e.getColor();
+        // The popover dots signal "which calendar has entries on
+        // which day" — so the source-of-truth colour is the
+        // calendar's, not any per-event override. Prefer the
+        // persistent CUSTOM_CALENDAR_COLOR (always set by
+        // applyColours / applySubscriptionOverride) over
+        // entry.getColor() — the latter holds the per-event fill
+        // when the user picked one and the calendar colour
+        // otherwise; reading it would make a single user-coloured
+        // event flip the day's dot away from its calendar's
+        // colour. BUG #1 fix companion.
+        String colour = e.getCustomProperty(
+            com.svenruppert.chronogrid.service.CalendarService
+                .CUSTOM_CALENDAR_COLOR);
+        if (colour == null || colour.isBlank()) colour = e.getColor();
         if (colour == null || colour.isBlank()) return;
         java.time.LocalDateTime startDt = e.getStart();
         java.time.LocalDateTime endDt = e.getEnd();
@@ -687,7 +700,9 @@ public class ChronoGrid extends Composite<VerticalLayout>
         });
       }
       if (!colorByCollection.isEmpty()) {
-        stream = stream.peek(e -> applySubscriptionColor(e, colorByCollection));
+        stream = stream.peek(e ->
+            com.svenruppert.chronogrid.service.CalendarService
+                .applySubscriptionOverride(e, colorByCollection));
       }
       // Harvest tag universe on every fetch + apply the active
       // tag filter (Feature #3). Universe grows monotonically until
@@ -776,20 +791,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
     }
     if (tagFilter != null) {
       tagFilter.setItems(snapshotTagUniverse());
-    }
-  }
-
-  private static void applySubscriptionColor(Entry entry,
-                                             java.util.Map<URI, String> colors) {
-    java.util.Optional<URI> href =
-        com.svenruppert.chronogrid.mapping.EntryMapper.readHref(entry);
-    if (href.isEmpty()) return;
-    String src = href.get().toString();
-    for (java.util.Map.Entry<URI, String> e : colors.entrySet()) {
-      if (src.startsWith(e.getKey().toString())) {
-        entry.setColor(e.getValue());
-        return;
-      }
     }
   }
 

@@ -235,6 +235,42 @@ public final class CalendarService implements HasLogger {
     }
   }
 
+  /**
+   * Applies a user-chosen <strong>subscription colour</strong> on top
+   * of the calendar's CalDAV-side default. Walks {@code subColours}
+   * to find a URI prefix that matches the entry's
+   * {@code CUSTOM_HREF}; on a hit, the matched colour is fed through
+   * {@link #applyColours(Entry, String)} so the per-event colour
+   * layering (fill = own colour when set, border = calendar) is
+   * preserved.
+   *
+   * <p>BUG #1 fix: before this method existed, the call site in
+   * {@code ChronoGrid.rangeWithStatus} ran a one-line
+   * {@code entry.setColor(...)} that overwrote both fill <em>and</em>
+   * border with the subscription colour — silently undoing any
+   * per-event colour the user had picked. The delegation to
+   * {@link #applyColours} re-introduces the split-colour rule for
+   * the subscription-override branch too.
+   *
+   * <p>No-op if the entry has no {@code CUSTOM_HREF} or no URI in
+   * {@code subColours} matches as a prefix; in those cases the entry
+   * keeps whatever colours the upstream {@code fanOut} already set.
+   */
+  public static void applySubscriptionOverride(
+      Entry entry,
+      java.util.Map<URI, String> subColours) {
+    if (entry == null || subColours == null || subColours.isEmpty()) return;
+    java.util.Optional<URI> href = EntryMapper.readHref(entry);
+    if (href.isEmpty()) return;
+    String src = href.get().toString();
+    for (java.util.Map.Entry<URI, String> e : subColours.entrySet()) {
+      if (src.startsWith(e.getKey().toString())) {
+        applyColours(entry, e.getValue());
+        return;
+      }
+    }
+  }
+
   public Optional<Entry> findById(String uid) {
     try {
       RemoteEvent remote = primary.get(uid);
