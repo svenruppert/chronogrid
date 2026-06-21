@@ -326,35 +326,60 @@ vaadin-date-picker::part(today) {
     border-left-width: 4px;
 }
 
-/* ── Day-hint indicator next to the date picker (Feature #1) ── */
+/* ── Per-day dot indicator inside the date-picker popover (Feature #5) ──
+ *
+ * The CalendarNavigationBar pushes a Map<LocalDate,Set<String>>
+ * onto the date-picker element via executeJs whenever the popover
+ * opens; the JS walker writes `data-cg-events="N"` and a CSS
+ * custom property `--cg-day-colors: c1 c2 c3` on every matching
+ * `[part~="date"]` cell across the rendered <vaadin-month-calendar>
+ * shadow roots. The rules below render up to three dots below the
+ * day number using a conic gradient — same colour vocabulary as
+ * the main calendar grid, so the user sees calendar provenance
+ * at a glance while jumping dates. */
 
-.chronogrid-nav__day-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
+vaadin-month-calendar::part(date)[data-cg-events] {
+    position: relative;
+}
+
+vaadin-month-calendar::part(date)[data-cg-events]::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 4px;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 4px;
     border-radius: 999px;
-    background-color: var(--lumo-contrast-5pct);
-    font-size: var(--lumo-font-size-xs);
-    color: var(--lumo-secondary-text-color);
-    line-height: 1;
-    height: 28px;
-    white-space: nowrap;
+    pointer-events: none;
+    /* The 1/2/3-colour rules below override `background` to a
+     * linear-gradient — 1 segment / 2 halves / 3 thirds. This
+     * default solid-primary is the visual fallback when the
+     * data-cg-events attribute is set but no --cg-day-color-N
+     * custom property reached the cell. */
+    background: var(--lumo-primary-color);
 }
 
-.chronogrid-nav__day-hint-text {
-    font-weight: 500;
+/* 1-colour case: one solid bar in the calendar's colour. */
+vaadin-month-calendar::part(date)[data-cg-events="1"]::after {
+    background: var(--cg-day-color-1, var(--lumo-primary-color));
 }
 
-.chronogrid-nav__day-hint-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    box-shadow: 0 0 0 1px var(--lumo-contrast-10pct);
+/* 2-colour case: halves. */
+vaadin-month-calendar::part(date)[data-cg-events="2"]::after {
+    background: linear-gradient(
+        to right,
+        var(--cg-day-color-1, var(--lumo-primary-color)) 0% 50%,
+        var(--cg-day-color-2, var(--lumo-primary-color)) 50% 100%
+    );
 }
 
-.chronogrid-nav__day-hint-overflow {
-    font-variant-numeric: tabular-nums;
-    color: var(--lumo-tertiary-text-color);
+/* 3-colour case: thirds. */
+vaadin-month-calendar::part(date)[data-cg-events="3"]::after {
+    background: linear-gradient(
+        to right,
+        var(--cg-day-color-1, var(--lumo-primary-color)) 0% 33.333%,
+        var(--cg-day-color-2, var(--lumo-primary-color)) 33.333% 66.666%,
+        var(--cg-day-color-3, var(--lumo-primary-color)) 66.666% 100%
+    );
 }

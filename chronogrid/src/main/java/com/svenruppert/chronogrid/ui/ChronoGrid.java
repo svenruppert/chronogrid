@@ -453,34 +453,60 @@ public class ChronoGrid extends Composite<VerticalLayout>
         },
         this::applyViewMode,
         this::applyNDays);
-    bar.setDayColoursProvider(this::coloursForDay);
+    bar.setDayDotsProvider(this::coloursForRange);
     return bar;
   }
 
   /**
-   * Feature #1: collects the set of calendar colours of all entries
-   * that overlap the given day. Drives the popover-adjacent indicator
-   * in {@link CalendarNavigationBar}. Goes through {@code service.findInRange}
-   * which the {@link com.vaadin.flow.component.html.Div main calendar}
-   * already uses — the call is idempotent and the underlying CalDAV
-   * cache typically holds the surrounding window already.
+   * Feature #5 (Popover-internal): groups every entry that
+   * overlaps {@code [from, to]} (inclusive) by its event-day, and
+   * collects the calendar-source colour set per day. The result
+   * drives the in-popover dot indicator the
+   * {@link CalendarNavigationBar} pushes to the DatePicker.
+   *
+   * <p>Single CalDAV call covering the whole window — much cheaper
+   * than per-day calls when the popover spans 60+ visible days
+   * (month ± 1). Multi-day entries contribute their colour to
+   * every day they cover.
    */
-  java.util.Set<String> coloursForDay(java.time.LocalDate day) {
-    if (day == null || service == null) {
-      return java.util.Collections.emptySet();
+  java.util.Map<java.time.LocalDate, java.util.Set<String>>
+      coloursForRange(java.time.LocalDate from, java.time.LocalDate to) {
+    if (from == null || to == null || service == null || to.isBefore(from)) {
+      return java.util.Collections.emptyMap();
     }
-    java.time.LocalDateTime from = day.atStartOfDay();
-    java.time.LocalDateTime to = day.plusDays(1).atStartOfDay();
+    java.time.LocalDateTime fromDt = from.atStartOfDay();
+    java.time.LocalDateTime toDt = to.plusDays(1).atStartOfDay();
+    java.util.Map<java.time.LocalDate, java.util.Set<String>> out =
+        new java.util.HashMap<>();
     try {
-      java.util.LinkedHashSet<String> colours = new java.util.LinkedHashSet<>();
-      rangeWithStatus(from, to).forEach(e -> {
-        String c = e.getColor();
-        if (c != null && !c.isBlank()) colours.add(c);
+      rangeWithStatus(fromDt, toDt).forEach(e -> {
+        String colour = e.getColor();
+        if (colour == null || colour.isBlank()) return;
+        java.time.LocalDateTime startDt = e.getStart();
+        java.time.LocalDateTime endDt = e.getEnd();
+        if (startDt == null) return;
+        java.time.LocalDate dayStart = startDt.toLocalDate();
+        java.time.LocalDate dayEnd = endDt != null
+            ? endDt.toLocalDate()
+            : dayStart;
+        // FullCalendar's convention: an end at midnight closes the
+        // *previous* day. Trim so an event 14:00–15:00 doesn't spill
+        // into the next day's bucket.
+        if (endDt != null && endDt.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+            && dayEnd.isAfter(dayStart)) {
+          dayEnd = dayEnd.minusDays(1);
+        }
+        for (java.time.LocalDate d = dayStart;
+             !d.isAfter(dayEnd) && !d.isAfter(to);
+             d = d.plusDays(1)) {
+          if (d.isBefore(from)) continue;
+          out.computeIfAbsent(d, k -> new java.util.LinkedHashSet<>()).add(colour);
+        }
       });
-      return colours;
+      return out;
     } catch (RuntimeException ex) {
-      logger().info("coloursForDay({}) failed: {}", day, ex.toString());
-      return java.util.Collections.emptySet();
+      logger().info("coloursForRange({}..{}) failed: {}", from, to, ex.toString());
+      return java.util.Collections.emptyMap();
     }
   }
 

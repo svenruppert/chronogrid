@@ -1,18 +1,54 @@
-# Feature Backlog (Post-Freeze)
+# Feature Backlog
 
-Repository for feature ideas that sat **outside** the original
-feature freeze (see memory `project-feature-freeze`, in force from
-2026-06-16 to 2026-06-20 for the companion blog post). With the
-freeze lifted, entries from here are pulled forward for
-implementation.
+**This file is the shipped-features ledger.** Every entry below
+describes a feature that is already in production. The file feeds
+the public project website, which is why every entry is written in
+British English and follows the same schema.
 
-Each entry follows the same schema:
+## Lifecycle
 
-- **Idea** — what should happen
+Features start their life in [`Feature-Planning.md`](Feature-Planning.md)
+(German, internal). Out of Planning a feature has exactly two
+exits:
+
+```
+                          ┌─►  FEATURE_BACKLOG.md   (this file, shipped)
+Feature-Planning.md  ─────┤
+                          └─►  Features-Skipped.md  (rejected, German)
+```
+
+When a feature is **shipped**, its entry is rewritten into the
+shipped-schema below, translated into British English, and moved
+here. When a feature is **rejected without shipping**, the entry
+moves to [`Features-Skipped.md`](Features-Skipped.md) with the
+rejection date and rationale instead. Either way the Planning
+entry is deleted at the move.
+
+The three files — Planning + Backlog + Skipped — together are
+exhaustive: any feature ever considered is in exactly one of them.
+The companion file [`FEATURES.md`](FEATURES.md) is a higher-level
+overview of the shipped functionality grouped by capability area.
+
+## Entry schema
+
+- **Status** — `✅ shipped YYYY-MM-DD in <commit>` (the commit body
+  carries the full implementation map; the Backlog summarises)
+- **Filed** — date the entry was opened in Planning
+- **Idea** — what the feature does, end-user wording
 - **Motivation** — why it is worth doing
-- **Sketch** — rough technical plan (no lock-in)
+- **Sketch** — rough technical plan as it actually shipped
 - **Acceptance signals** — how we know it is finished
-- **Risks / open questions**
+- **Risks / open questions** — known follow-ups, tuning points,
+  deferred v2 scope
+
+## Historical note
+
+This file was originally created as a post-freeze backlog of
+queued ideas (see memory `project-feature-freeze`, in force from
+2026-06-16 to 2026-06-20 for the companion blog post). With the
+freeze lifted on 2026-06-20 the file's role narrowed to its
+current shipped-only ledger function; the planning side moved into
+`Feature-Planning.md`.
 
 ---
 
@@ -363,7 +399,7 @@ backgroundColor`, so the thicker border reads as a single solid block
 
 ---
 
-## #5 — Appointment indicator beside the date picker
+## #5 — Per-day appointment dots inside the date-picker popover
 
 **Status:** ✅ shipped 2026-06-21 (see the commit body for the full
 implementation map)
@@ -371,112 +407,163 @@ implementation map)
 
 ### Idea
 
-The "Go to date" picker used to be a blind jump — you opened the
-popover and you had to remember which days had events. The user
-asked for a per-day visual marker in the popover itself so a single
-glance answers "is anything on this date?". Vaadin 25's `DatePicker`
-exposes no public day-renderer hook and the popover internals live
-behind two shadow-DOM hops — landing dots **inside** the popover
-freeze-safely was not possible. This entry ships the freeze-safe
-v1: an indicator badge **next to** the date picker that updates
-whenever the popover opens or the user picks a date.
+When the user opens the "Go to date" picker, every day cell in the
+popover calendar shows **inline visual dots** for the calendars
+that already have entries on that day. A glance at the dropdown
+answers *"which days are free, which days are busy, and from which
+calendars?"* — without leaving the picker, without committing a
+selection, without scrolling the main grid.
+
+Concrete use case Sven described: picking a free day for a
+publication. The dots reveal at a glance which weeks already have
+publications stacked up, so the eye lands on a quiet stretch
+without trial-and-error jumping.
 
 ### Motivation
 
-The indicator carries the same information signal the original
-sketch wanted — "how many calendars have an entry on this day, and
-in which colours" — but through stable Vaadin API instead of
-shadow-DOM walking. A user planning a meeting jumps through dates
-and immediately sees:
+The popover used to be a blind jump — opening it gave no signal
+about which dates were already committed. Pre-#5 the user had to
+either remember the schedule, open the main grid in parallel, or
+commit a pick and read it from the post-selection rendering. None
+of these are how a date picker is supposed to work; the popover IS
+the planning surface for "find me a day", and it should carry the
+information needed to make that decision.
 
-- *"No events"* — green-light to schedule there
-- *"1 calendar •"* — touch-up needed; lone calendar dot in its
-  source colour
-- *"3 calendars • • •"* (or *"4 calendars • • • +1"*) — busy
-  day, see the calendar grid for details
+The dot indicator is colour-coded by **calendar source** (same
+palette the main grid uses), so a busy day still tells the user
+*which* calendar is busy — useful when juggling personal /
+work / family / publication calendars.
 
 ### Sketch
 
-The aggregation runs in `ChronoGrid#coloursForDay(LocalDate)`:
+The aggregation runs in `ChronoGrid#coloursForRange(from, to)`:
 
 ```java
-java.util.Set<String> coloursForDay(LocalDate day) {
-    LocalDateTime from = day.atStartOfDay();
-    LocalDateTime to = day.plusDays(1).atStartOfDay();
-    var colours = new LinkedHashSet<String>();
-    rangeWithStatus(from, to).forEach(e -> {
-        String c = e.getColor();
-        if (c != null && !c.isBlank()) colours.add(c);
+Map<LocalDate, Set<String>> coloursForRange(LocalDate from, LocalDate to) {
+    LocalDateTime fromDt = from.atStartOfDay();
+    LocalDateTime toDt = to.plusDays(1).atStartOfDay();
+    Map<LocalDate, Set<String>> out = new HashMap<>();
+    rangeWithStatus(fromDt, toDt).forEach(e -> {
+        String colour = e.getColor();
+        if (colour == null || colour.isBlank()) return;
+        LocalDate dayStart = e.getStart().toLocalDate();
+        LocalDate dayEnd   = e.getEnd() != null ? e.getEnd().toLocalDate() : dayStart;
+        // multi-day events contribute their colour to every covered day
+        for (LocalDate d = dayStart; !d.isAfter(dayEnd); d = d.plusDays(1)) {
+            out.computeIfAbsent(d, k -> new LinkedHashSet<>()).add(colour);
+        }
     });
-    return colours;
+    return out;
 }
 ```
+
+ONE CalDAV `findInRange` call per popover-open covers the whole
+visible month-±1 window — not one call per day. Multi-day entries
+contribute to every day they span, with the FullCalendar
+"midnight closes the previous day" convention honoured so a
+14:00–15:00 entry doesn't spill into the next bucket.
 
 `CalendarNavigationBar` accepts the aggregator through
-`setDayColoursProvider(Function<LocalDate, Set<String>>)` and runs
-it on every value-change and every `opened-changed` of the
-`DatePicker`. The badge renders into a small pill-shaped `Div`:
-text counter + up to three coloured dots + `+N` overflow.
+`setDayDotsProvider(BiFunction<LocalDate, LocalDate, Map<LocalDate, Set<String>>>)`
+and triggers it on every `opened-changed`/`value-change` of the
+`DatePicker`. The result is serialised to JSON
+(`{"2026-06-15":["#1f77b4","#ff7f0e"], …}`) and pushed to the
+picker element together with a tiny shadow-DOM walker via
+`executeJs`:
 
-CSS lives in `chronogrid.css`:
-
-```css
-.chronogrid-nav__day-hint {
-    display: inline-flex;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background-color: var(--lumo-contrast-5pct);
-    font-size: var(--lumo-font-size-xs);
-}
-.chronogrid-nav__day-hint-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-}
+```js
+// Walk picker._overlayContent.shadowRoot → vaadin-month-calendar.shadowRoot
+// → [part~="date"]. For each cell whose date is in the pushed map,
+// stamp data-cg-events="N" + --cg-day-color-1/-2/-3.
+// A MutationObserver on the overlay re-paints when the user
+// navigates months inside the popover (◀/▶).
 ```
 
-i18n keys: `calendar.nav.dayHint.none`, `calendar.nav.dayHint.one`,
-`calendar.nav.dayHint.many` (EN + DE).
+CSS in `chronogrid.css` paints a 20×4 px bar under the day number,
+split into 1 / 2 / 3 colour segments via `linear-gradient`:
+
+```css
+vaadin-month-calendar::part(date)[data-cg-events]::after {
+    content: "";
+    position: absolute; left: 50%; bottom: 4px;
+    transform: translateX(-50%);
+    width: 20px; height: 4px; border-radius: 999px;
+    background: var(--lumo-primary-color);
+}
+vaadin-month-calendar::part(date)[data-cg-events="2"]::after {
+    background: linear-gradient(to right,
+        var(--cg-day-color-1) 0% 50%,
+        var(--cg-day-color-2) 50% 100%);
+}
+/* …and a 3-third gradient for data-cg-events="3" */
+```
+
+Days with 4+ contributing calendars cap at the 3-third gradient
+(no overflow indicator — the bar is a "many" signal, not a
+counter).
 
 ### Acceptance signals
 
-- ✅ The badge renders next to the date picker on every view mode
-  (Day / Week / N&nbsp;days / Month) — visible at all times, not
-  just when the popover is open.
-- ✅ Opening the popover and hovering different dates does not
-  update the badge per-hovered-day (no `hover` listener on the
-  picker is available); the badge updates on **picker open** for
-  the currently-selected date and on **value commit** afterwards.
-  This is the documented v1 behaviour — feedback may steer the v2
-  scope.
-- ✅ The badge degrades silently to "No events" when the network
-  is offline (the aggregator catches `RuntimeException` from
-  `findInRange` and returns the empty set).
-- ✅ All 289 existing tests stay green; `BugInstance size is 0`
-  on both `chronogrid-core` and `chronogrid` after the change.
+- ✅ Opening the popover paints a bar under every day cell that
+  has at least one entry within the visible month-±1 window.
+- ✅ Navigating months inside the popover (the popover's own
+  ◀/▶ buttons) re-paints — `MutationObserver` on the overlay
+  catches Vaadin's cell-reuse and re-runs the walker.
+- ✅ Days with 1 / 2 / 3 contributing calendars render a solid /
+  half-split / third-split bar in the source colours.
+- ✅ Days with 4+ contributing calendars render the 3-third bar
+  (capped, no extra overflow indicator).
+- ✅ Empty days render no bar.
+- ✅ When the network is offline, the aggregator catches the
+  `RuntimeException` from `findInRange` and returns an empty map
+  — the popover renders cleanly with no bars.
+- ✅ All tests stay green; `BugInstance size is 0` on both
+  `chronogrid-core` and `chronogrid`.
+
+### Open history note
+
+The very first version of this entry (committed on the same day
+as the corrected version) shipped a *different* solution: an
+indicator badge **next to** the date picker, updated on
+value-change, showing the count and dots for the currently-focused
+date. That version misread the request — Sven's intent was a
+visual signal **inside the dropdown calendar cells**, not adjacent
+to the picker, so a busy week stands out at a glance during
+date-search. The corrected version landed the same day, replacing
+the adjacent-badge code (removed CSS class
+`.chronogrid-nav__day-hint*` + dayHint i18n keys) with the
+shadow-DOM walker described above. Recorded here open so the
+reasoning is traceable for the next reader.
 
 ### Risks / open questions
 
-- **In-popover dots remain the v2 target.** Achieving per-day
-  marks **inside** the Vaadin 25 `DatePicker` popover needs JS
-  that walks two shadow-DOM levels (overlay-content →
-  month-calendar grid). The walk is browser-safe but cannot be
-  smoke-tested in headless and is fragile across Vaadin minor
-  versions — deferred until the freeze lifts. The aggregator and
-  state plumbing landed here are reusable for that v2 phase.
-- **Aggregator hits the CalDAV server.** Each open / value-change
-  triggers a fresh `findInRange` for a 24-hour window. The
-  underlying client typically reads from its in-process cache;
-  if the cache is cold the call is a network round-trip. If
-  popover-open performance becomes a complaint, debounce on the
-  `CalendarNavigationBar` side (`Executors.newSingleThreadScheduledExecutor()`,
-  150-ms trailing).
-- **Three-dot visual cap.** A day with four or more calendar
-  sources collapses extra dots into `+N`. Could be configurable
-  (`setMaxVisibleDots(int)`), but real-world usage rarely
-  surpasses three active calendars per day — left as a tuning
-  point.
+- **Vaadin shadow-DOM contract.** The walker reaches
+  `picker._overlayContent.shadowRoot → vaadin-month-calendar
+  .shadowRoot → [part~="date"]`. This works against Vaadin 25.1.1
+  but a future Vaadin minor that renames the part name or hides
+  the overlay-content shadow root would silently drop the dots
+  (no Java exception, just no paint). Pin a smoke-test of this
+  feature into the upgrade checklist whenever Vaadin's
+  `vaadin.version` property is bumped.
+- **Aggregator hits the CalDAV server.** Each popover-open
+  triggers one `findInRange` for ~60 days. The underlying client
+  typically reads from its in-process cache; if cold, a network
+  round-trip per open. Acceptable for v1 (one call per
+  pop-open ≠ per-day-hover); the obvious tuning is to also
+  push on month-navigation-inside-the-popover, but that needs a
+  Java↔JS event channel that v1 deliberately skips.
+- **Multi-day entries contribute to every covered day.** A 5-day
+  vacation paints the bar in all 5 days, not just start/end —
+  this is what you want for "is the day free?", but it shows up
+  as 5 separate busy days. Could be tuned to only mark
+  start+end if a use case argues for it; v1 ships the simpler
+  rule.
+- **3-bar cap is silent.** Days with 4+ contributing calendars
+  cap at the 3-third gradient without an overflow indicator (no
+  `+N`). A v2 could surface this via a small badge below the
+  bar; for now "3 distinct colours" is a strong enough signal
+  that the user understands the day is busy across multiple
+  sources.
 
 ---
 

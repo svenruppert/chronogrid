@@ -1,9 +1,24 @@
 # ChronoGrid — Feature Overview
 
-Snapshot of what's actually in the codebase right now (post-rebrand,
-post-Backlog-#1). For deferred / planned items see
-[`FEATURE_BACKLOG.md`](FEATURE_BACKLOG.md); for the architecture
+High-level snapshot of what is actually in the codebase right now,
+grouped by capability area. This is the *narrative* view.
+
+For the **per-feature shipped ledger** (one entry per feature with
+motivation, sketch, acceptance signals, risks) see
+[`FEATURE_BACKLOG.md`](FEATURE_BACKLOG.md). For the **in-flight /
+queued** features see [`Feature-Planning.md`](Feature-Planning.md).
+For **rejected** features (with date + rationale) see
+[`Features-Skipped.md`](Features-Skipped.md). For the architecture
 journey see [`CHRONOGRID_EXTRACTION.md`](CHRONOGRID_EXTRACTION.md).
+
+```
+                            ┌─►  FEATURE_BACKLOG.md  ──►  FEATURES.md
+Feature-Planning.md  ───────┤    (shipped ledger)         (this file)
+   (in flight, German)      │    British English          British English
+                            │
+                            └─►  Features-Skipped.md
+                                 (rejected, German)
+```
 
 Reactor at a glance:
 

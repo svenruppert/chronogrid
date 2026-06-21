@@ -33,11 +33,8 @@ import com.vaadin.flow.dom.Element;
 
 import java.time.LocalDate;
 import java.util.EnumMap;
-import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.IntConsumer;
 
 /**
@@ -88,9 +85,6 @@ public final class CalendarNavigationBar
   private static final String K_VIEW_NDAYS = "calendar.nav.view.nDays";
   private static final String K_VIEW_MONTH = "calendar.nav.view.month";
   private static final String K_NDAYS_VALUE = "calendar.nav.nDays.value";
-  private static final String K_DAY_HINT_NONE = "calendar.nav.dayHint.none";
-  private static final String K_DAY_HINT_ONE = "calendar.nav.dayHint.one";
-  private static final String K_DAY_HINT_MANY = "calendar.nav.dayHint.many";
 
   private final DatePicker datePicker;
   private final Tabs viewTabs;
@@ -98,18 +92,26 @@ public final class CalendarNavigationBar
   private final Span nDaysValueLabel;
   private final HorizontalLayout nGroup;
   private final Div intervalLabel;
-  private final Div dayHintBadge;
   private final Map<ViewMode, Tab> tabsByMode = new EnumMap<>(ViewMode.class);
 
   /**
-   * Resolves the set of calendar colours (CSS-coloured strings — hex,
-   * named, anything the consumer's calendars use) for a given day so
-   * the popover-adjacent indicator can paint dots in the originating
-   * calendars' colours. The function may return an empty set for days
-   * without entries; {@code null} is treated as empty.
+   * Resolves, for a given inclusive date range, a per-day set of
+   * calendar-source colours. The popover walker uses the returned
+   * map to paint up to three coloured dots per day cell in the
+   * {@code <vaadin-date-picker>} popover — same colours the
+   * underlying calendars use, so the user can see at a glance
+   * which calendars have events on which day. {@code null} or
+   * absent days are treated as "no events".
+   *
+   * <p>A range-shaped query (vs. per-day) is the single hot-path
+   * call we make for the popover: one CalDAV {@code findInRange}
+   * for the whole visible window (month ± 1), grouped on the
+   * Java side. Avoids the popover-fans-out-as-many-RPCs-as-days
+   * trap.
    */
-  private Function<LocalDate, Set<String>> dayColoursProvider =
-      d -> java.util.Collections.emptySet();
+  private java.util.function.BiFunction<LocalDate, LocalDate,
+      java.util.Map<LocalDate, java.util.Set<String>>> dayDotsProvider =
+      (from, to) -> java.util.Collections.emptyMap();
 
   /** Encapsulates the five navigation callbacks. */
   public record NavigationCallbacks(Runnable pageBack,
@@ -172,31 +174,24 @@ public final class CalendarNavigationBar
       if (e.getValue() != null) {
         logger().info("Nav: date jump -> {}", e.getValue());
         onDateChanged.accept(e.getValue());
-        refreshDayHint(e.getValue());
+        pushDayDots(e.getValue());
       }
     });
-    // Refresh the day-hint badge whenever the popover opens so the
-    // user sees an up-to-date indicator for the currently-focused
-    // date without having to commit a pick first.
+    // ── Feature #5: per-day dots inside the popover ─────────────
+    // On every popover-open, aggregate the visible month-range from
+    // the user's cached entries and push a Map<LocalDate,Set<String>>
+    // (date → calendar-source colours) down to the picker element.
+    // The JS-side walker installs a MutationObserver on the overlay
+    // and stamps `data-cg-events` + a `--cg-day-colors` custom
+    // property on every matching day cell — CSS paints the dots
+    // from the gradient.
     datePicker.addOpenedChangeListener(e -> {
       if (e.isOpened()) {
-        refreshDayHint(datePicker.getValue());
+        pushDayDots(datePicker.getValue());
       }
     });
 
-    // ── Feature #1: appointment indicator next to the DatePicker ──
-    // FullCalendar's popover does not expose a stable day-renderer
-    // hook in Vaadin 25, so the per-day dots that the original
-    // sketch envisaged inside the popover cannot ship freeze-safe.
-    // Instead, an adjacent badge updates on date-pick + popover-open
-    // and shows the count of events on the focused day plus a
-    // coloured dot for each contributing calendar — same information
-    // signal, reachable via stable Vaadin API.
-    dayHintBadge = new Div();
-    dayHintBadge.addClassName("chronogrid-nav__day-hint");
-    refreshDayHint(initialDate);
-
-    HorizontalLayout left = new HorizontalLayout(navGroup, datePicker, dayHintBadge);
+    HorizontalLayout left = new HorizontalLayout(navGroup, datePicker);
     left.setAlignItems(FlexComponent.Alignment.END);
     left.setSpacing(true);
 
@@ -320,62 +315,157 @@ public final class CalendarNavigationBar
   }
 
   /**
-   * Wires an aggregator that resolves the set of calendar colours
-   * present on any given day. Called on every value-change and on
-   * every popover-open of the DatePicker; the badge next to the
-   * picker repaints accordingly. Pass an empty-returning function to
-   * effectively hide the badge.
+   * Wires a range aggregator that resolves, for an inclusive date
+   * range, a per-day set of calendar-source colours. Called on
+   * every {@code opened-changed}/value-change of the DatePicker;
+   * the resulting map is serialised to JSON and pushed to the
+   * picker element where the in-popover JS walker paints dots on
+   * each matching day cell.
+   *
+   * <p>Pass an empty-returning function to effectively disable the
+   * indicator.
    */
-  public void setDayColoursProvider(Function<LocalDate, Set<String>> provider) {
-    this.dayColoursProvider = provider != null
-        ? provider
-        : d -> java.util.Collections.emptySet();
-    refreshDayHint(datePicker.getValue());
+  public void setDayDotsProvider(
+      java.util.function.BiFunction<LocalDate, LocalDate,
+          java.util.Map<LocalDate, java.util.Set<String>>> provider) {
+    this.dayDotsProvider = provider != null ? provider
+        : (from, to) -> java.util.Collections.emptyMap();
   }
 
-  /** Visible for the browserless tests — keeps the contract explicit. */
-  public String dayHintTextForTesting() {
-    return dayHintBadge.getText();
+  /**
+   * Computes the visible-month-±1 window around {@code anchor}
+   * and pushes the colour map down to the picker element. Idempotent
+   * for the same window — the JS walker reads {@code data-cg-dots}
+   * on the picker element on every paint, so re-pushing the same
+   * value is cheap.
+   */
+  private void pushDayDots(LocalDate anchor) {
+    LocalDate centre = anchor != null ? anchor : LocalDate.now();
+    LocalDate from = centre.withDayOfMonth(1).minusMonths(1);
+    LocalDate to = centre.withDayOfMonth(1).plusMonths(2).minusDays(1);
+    java.util.Map<LocalDate, java.util.Set<String>> coloursByDay;
+    try {
+      coloursByDay = dayDotsProvider.apply(from, to);
+      if (coloursByDay == null) coloursByDay = java.util.Collections.emptyMap();
+    } catch (RuntimeException ex) {
+      logger().info("dayDotsProvider({}..{}) failed: {}", from, to, ex.toString());
+      coloursByDay = java.util.Collections.emptyMap();
+    }
+    String json = serialiseDayDots(coloursByDay);
+    Element el = datePicker.getElement();
+    el.setProperty("__cgDayDotsPayload", json);
+    el.executeJs(POPOVER_WALKER_JS);
   }
 
-  private void refreshDayHint(LocalDate date) {
-    dayHintBadge.removeAll();
-    if (date == null) {
-      dayHintBadge.setVisible(false);
-      return;
+  /**
+   * Serialises a {@code Map<LocalDate, Set<String>>} into the JSON
+   * shape the in-popover walker expects:
+   * {@code {"2026-06-15":["#1f77b4","#ff7f0e"], ...}}.
+   *
+   * <p>Hand-rolled to avoid pulling Jackson into the navigation-bar
+   * for this single one-shot push — the values are CSS colour
+   * strings (hex / named) so escaping rules are trivial.
+   */
+  private static String serialiseDayDots(
+      java.util.Map<LocalDate, java.util.Set<String>> map) {
+    StringBuilder b = new StringBuilder(map.size() * 32 + 2);
+    b.append('{');
+    boolean first = true;
+    for (java.util.Map.Entry<LocalDate, java.util.Set<String>> e : map.entrySet()) {
+      java.util.Set<String> colours = e.getValue();
+      if (colours == null || colours.isEmpty()) continue;
+      if (!first) b.append(',');
+      first = false;
+      b.append('"').append(e.getKey()).append("\":[");
+      int painted = 0;
+      for (String c : colours) {
+        if (c == null || c.isBlank()) continue;
+        if (painted > 0) b.append(',');
+        b.append('"').append(escapeJsonString(c)).append('"');
+        painted++;
+        if (painted >= 3) break;
+      }
+      b.append(']');
     }
-    Set<String> colours = dayColoursProvider.apply(date);
-    if (colours == null) colours = java.util.Collections.emptySet();
-    // Dedupe + preserve insertion order so the same calendar palette
-    // always renders the dots in the same order across rebuilds.
-    Set<String> ordered = new LinkedHashSet<>(colours);
-    int n = ordered.size();
-    Span text;
-    if (n == 0) {
-      text = new Span(messages.tr(K_DAY_HINT_NONE, "No events"));
-    } else if (n == 1) {
-      text = new Span(messages.tr(K_DAY_HINT_ONE, "1 calendar"));
-    } else {
-      text = new Span(messages.tr(K_DAY_HINT_MANY,
-          "{0} calendars", String.valueOf(n)));
-    }
-    text.addClassName("chronogrid-nav__day-hint-text");
-    dayHintBadge.add(text);
-    int painted = 0;
-    for (String colour : ordered) {
-      if (painted >= 3) break;   // cap visual width — extra runs via "+N"
-      if (colour == null || colour.isBlank()) continue;
-      Span dot = new Span();
-      dot.addClassName("chronogrid-nav__day-hint-dot");
-      dot.getStyle().set("background-color", colour);
-      dayHintBadge.add(dot);
-      painted++;
-    }
-    if (n > 3) {
-      Span overflow = new Span("+" + (n - 3));
-      overflow.addClassName("chronogrid-nav__day-hint-overflow");
-      dayHintBadge.add(overflow);
-    }
-    dayHintBadge.setVisible(true);
+    b.append('}');
+    return b.toString();
   }
+
+  private static String escapeJsonString(String s) {
+    StringBuilder b = new StringBuilder(s.length() + 2);
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (c == '"' || c == '\\') b.append('\\');
+      b.append(c);
+    }
+    return b.toString();
+  }
+
+  /**
+   * In-popover walker. Runs against {@code this} = the
+   * {@code <vaadin-date-picker>} element on every push. Idempotent
+   * — repeated runs install at most one MutationObserver, and
+   * repeated paints just rewrite the same {@code data-cg-events}
+   * attributes.
+   *
+   * <p>Walks two shadow-DOM hops:
+   * {@code picker._overlayContent.shadowRoot → vaadin-month-calendar.shadowRoot}
+   * and stamps {@code data-cg-events="N"} + {@code --cg-day-colors:
+   * c1 c2 c3} on each {@code [part~="date"]} cell whose ISO date is
+   * in the pushed map. CSS in {@code chronogrid.css} renders the
+   * dots from the custom property.
+   *
+   * <p>The MutationObserver re-paints on month navigation inside
+   * the popover — needed because the cells are reused across
+   * months and Vaadin re-writes their {@code part} content without
+   * notifying us.
+   */
+  private static final String POPOVER_WALKER_JS =
+      "const picker=this;\n"
+    + "const raw=picker.__cgDayDotsPayload||'{}';\n"
+    + "let map={};try{map=JSON.parse(raw);}catch(e){map={};}\n"
+    + "function paint(cell){\n"
+    + "  const d=cell.date;\n"
+    + "  if(!(d instanceof Date)){return;}\n"
+    + "  const iso=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');\n"
+    + "  const cs=map[iso];\n"
+    + "  if(cs && cs.length){\n"
+    + "    const n=Math.min(3,cs.length);\n"
+    + "    cell.setAttribute('data-cg-events',String(n));\n"
+    + "    cell.style.setProperty('--cg-day-color-1',cs[0]||'currentColor');\n"
+    + "    cell.style.setProperty('--cg-day-color-2',cs[1]||cs[0]||'currentColor');\n"
+    + "    cell.style.setProperty('--cg-day-color-3',cs[2]||cs[1]||cs[0]||'currentColor');\n"
+    + "  } else {\n"
+    + "    cell.removeAttribute('data-cg-events');\n"
+    + "    cell.style.removeProperty('--cg-day-color-1');\n"
+    + "    cell.style.removeProperty('--cg-day-color-2');\n"
+    + "    cell.style.removeProperty('--cg-day-color-3');\n"
+    + "  }\n"
+    + "}\n"
+    + "function paintCalendar(mc){\n"
+    + "  const root=mc.shadowRoot||mc;\n"
+    + "  const cells=root.querySelectorAll('[part~=\"date\"]');\n"
+    + "  cells.forEach(paint);\n"
+    + "}\n"
+    + "function paintAll(content){\n"
+    + "  const root=content.shadowRoot||content;\n"
+    + "  const cals=root.querySelectorAll('vaadin-month-calendar');\n"
+    + "  cals.forEach(paintCalendar);\n"
+    + "}\n"
+    + "function attach(content){\n"
+    + "  if(!content){return;}\n"
+    + "  paintAll(content);\n"
+    + "  if(content.__cgObserver){return;}\n"
+    + "  const obs=new MutationObserver(()=>paintAll(content));\n"
+    + "  const root=content.shadowRoot||content;\n"
+    + "  obs.observe(root,{subtree:true,childList:true,attributes:true,attributeFilter:['part','date']});\n"
+    + "  content.__cgObserver=obs;\n"
+    + "}\n"
+    + "function waitForOverlay(retries){\n"
+    + "  const oc=picker._overlayContent;\n"
+    + "  if(oc){attach(oc);return;}\n"
+    + "  if(retries<=0){return;}\n"
+    + "  setTimeout(()=>waitForOverlay(retries-1),40);\n"
+    + "}\n"
+    + "waitForOverlay(25);\n";
 }
