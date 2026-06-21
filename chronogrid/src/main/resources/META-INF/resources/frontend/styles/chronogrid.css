@@ -307,3 +307,21 @@ vaadin-date-picker::part(today) {
     border-radius: 50%;
     font-weight: 700;
 }
+
+/* ── Stronger event borders for visible provenance (Feature #2) */
+
+/* Backlog #1 paints custom-coloured events with a calendar-coloured
+   border but FullCalendar's default 1-px width is barely visible
+   against a saturated background. Bump the border width globally to
+   3 px so the calendar provenance reads at a glance. For uniform-
+   coloured events (no own colour) border == background, so the
+   thicker border reads as a single solid block — no visual penalty. */
+.fc .fc-event {
+    border-width: 3px;
+}
+
+/* TimeGrid blocks: keep the left-edge accent prominent so the
+   provenance reads even on busy days where event blocks stack. */
+.fc .fc-timegrid-event {
+    border-left-width: 4px;
+}

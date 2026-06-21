@@ -287,3 +287,76 @@ on the host date-picker element directly.
   the navigation-bar one. That breaks the established
   „one-Today-affordance" UX decision, so the path is documented but
   deliberately not taken first.
+
+---
+
+## #4 — Stronger event borders for visible provenance
+
+**Status:** ✅ shipped 2026-06-21 (see the commit body for the full
+implementation map)
+**Filed:** 2026-06-21
+
+### Idea
+
+Make the calendar-coloured border that BACKLOG #1 introduced for
+custom-coloured events **clearly visible**. FullCalendar's default
+1-px border vanishes against a saturated event fill — the calendar
+provenance signal that BACKLOG #1 was meant to carry was getting lost
+at exactly the moment it mattered most (i.e. when the user did pick
+their own event colour).
+
+### Motivation
+
+BACKLOG #1 paints the entry fill in the user-picked colour and the
+entry border in the calendar's colour. Visually, the border is the
+provenance signal — „this red event is from my Family calendar even
+though I painted it green." A 1-px line that the browser anti-aliases
+away on retina displays is not a signal; it is a hope.
+
+Bumping the border width to a robust 3 px (4 px on TimeGrid event
+blocks where stacking is denser) makes the provenance signal land
+without changing any of the colour-allocation logic.
+
+### Sketch
+
+CSS-only, two rules in `chronogrid.css`:
+
+```css
+.fc .fc-event {
+    border-width: 3px;
+}
+.fc .fc-timegrid-event {
+    border-left-width: 4px;
+}
+```
+
+For uniform-coloured events (no own colour set), `borderColor ==
+backgroundColor`, so the thicker border reads as a single solid block
+— no visual regression for events that didn't pick their own colour.
+
+### Acceptance signals
+
+- ✅ A custom-coloured event in a multi-calendar view shows its
+  calendar provenance unambiguously without zooming in.
+- ✅ Uniform-coloured events still read as a single solid block —
+  no „decoration" effect from a visible border on top of the same
+  fill.
+- ✅ TimeGrid-stacked events on a busy day stay distinguishable —
+  the 4-px left edge survives the visual squeeze.
+- ✅ No JavaScript interop, no Vaadin shadow-DOM hooks; the rule
+  works on every supported Vaadin version unchanged.
+
+### Risks / open questions
+
+- **Cheap path vs. left-stripe path:** the original Feature-Planning
+  sketch (Planning #2) preferred a left-only stripe via a
+  `data-cg-custom-coloured` attribute on the rendered event element,
+  which would have avoided the thicker border on uniform events.
+  That path needs a FullCalendar `eventDidMount` JS callback or
+  `eventClassNames` returning logic — both fragile without browser
+  smoke testing. Cheap path ships now; the left-stripe path can
+  succeed it as a polish iteration.
+- **Month-view tightness:** in `dayGridMonth` the event blocks are
+  compact (often 16–20 px tall). A 3-px border eats ~30 % of the
+  block height. If consumer feedback complains, reduce to 2 px in
+  the Month view only via a more specific selector.
