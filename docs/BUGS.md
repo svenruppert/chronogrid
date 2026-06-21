@@ -224,3 +224,139 @@ Browser-Smoke-Test-Iterationen.
   zurückfallen und Border-Color implizit auf den selben Wert
   setzen — ist genau das, was die Methode tut. Kein Sonderpfad
   nötig.
+
+---
+
+## #2 — Per-Event-Farbe geht beim Bearbeiten in der iCloud-Native-UI verloren
+
+> **Original:** Wenn ich den Termin in iCloud Editiere, ist die
+> rote Farbe weg.
+>
+> *(Beobachtet beim Browser-Smoke-Test des [[BUG #1]]-Fix:
+> in-app-only-Roundtrip funktioniert, aber sobald der Termin in der
+> iCloud-Web-UI bearbeitet wird, kommt er ohne unsere COLOR-
+> Property zurück.)*
+
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Filed:** 2026-06-21
+
+### Analyse
+
+**Ursache (provider-seitig, nicht in unserem Code):** iCloud's
+Datenmodell für Kalender-Einträge kennt nur Per-Kalender-Farben,
+keine Per-Event-Farben. Wenn die iCloud-eigene UI (Web oder
+native Apple Apps) einen Termin editiert und über CalDAV
+zurückschreibt, verwirft sie die RFC-7986-`COLOR`-Property still,
+weil sie sie in ihr Datenmodell nicht abbilden kann. Per RFC 5545
+ist das nicht spezifikationskonform (Implementations „MUST be
+forward compatible" mit unbekannten Properties), aber es ist die
+Realität.
+
+**Unser Standard-Schreibpfad** (vor Fix) schrieb die User-Farbe
+nur als `COLOR:#ff0000`-Zeile. Nach iCloud-Edit: Property weg,
+beim nächsten `findInRange` liest `EntryMapper.toEntry` keinen
+COLOR-Wert, `CUSTOM_ENTRY_COLOR` wird nicht gesetzt,
+`CalendarService.applyColours` fällt in den Uniform-Branch
+(beide Slots = Kalender-Farbe). Ende: User-Pick weg.
+
+**Lösungsidee — RFC-konformer Sidechannel.** RFC 5545 §3.8.8.2
+spezifiziert `X-` Properties als den vorgesehenen Mechanismus
+für nicht-standardisierte Erweiterungen und verlangt von
+Implementierungen, sie über Round-trips zu erhalten — exakt das,
+was iCloud bei COLOR nicht tut, aber bei X-Properties durchaus.
+Wir schreiben die User-Farbe also doppelt:
+
+- **`COLOR:#ff0000`** — RFC-7986-Standard, primärer Lesepfad.
+  Bleibt drin für Forward-Compat und für Provider, die sie
+  korrekt round-trippen.
+- **`X-CHRONOGRID-COLOR:#ff0000`** — Sidechannel. Bleibt erhalten
+  wenn iCloud `COLOR` strippt.
+
+**Reader-Logik:** prefer COLOR (authoritativ wenn vorhanden),
+fallback X-CHRONOGRID-COLOR (recovery für iCloud-Edited-Events).
+Nach erneutem Save aus unserer App stehen wieder beide drin.
+
+Wenn iCloud irgendwann den COLOR-Strip stoppt: bestehender Code
+funktioniert weiter ohne Änderung (COLOR wird einfach öfter
+respektiert, X- bleibt als Backup).
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1** — *Per-event colour with a
+  calendar-coloured edge stripe*: Akzeptanz-Signal „User-Pick
+  überlebt CalDAV-Round-trip" galt für unsere App allein,
+  aber nicht für Cross-Provider-Edit-Pfade. Der Sidechannel
+  schließt diese Lücke ohne API-Change am Feature selbst.
+- **FEATURE_BACKLOG.md #5** — *Per-day appointment dots in
+  popover*: liest seit dem `246dade`-Fix den `CUSTOM_CALENDAR_COLOR`
+  statt `entry.getColor()`, ist also unabhängig von der
+  Per-Event-Farbe und damit nicht betroffen.
+
+Nicht betroffen: BACKLOG #2, #3, #4, #6 — keine Berührung mit
+dem COLOR-Property-Roundtrip.
+
+### Reproduktion
+
+1. App starten, mit iCloud verbinden.
+2. Termin öffnen, eigene Farbe (z.B. Rot) wählen, Save.
+3. Im Grid: Termin in Rot — passt. (BUG #1 in-app-Roundtrip ist
+   bestätigt.)
+4. iCloud-Web-UI öffnen (icloud.com), denselben Termin aufrufen,
+   z.B. den Titel ändern, in iCloud speichern.
+5. Zurück in unserer App: „Neu laden" klicken oder warten bis
+   der nächste `findInRange` läuft.
+6. **Vor dem Fix:** Termin steht wieder in der Kalender-Default-
+   Farbe (Blau), die rote User-Farbe ist weg.
+
+**Erwartetes Verhalten nach dem Fix:**
+
+5'. Im iCalendar-Body nach Save aus unserer App stehen **beide**
+    Zeilen drin: `COLOR:#ff0000` und `X-CHRONOGRID-COLOR:#ff0000`.
+6'. iCloud strippt `COLOR` beim Edit, aber `X-CHRONOGRID-COLOR`
+    bleibt erhalten.
+7'. Beim Re-Read in unserer App liest der Reader den
+    Sidechannel und stellt die rote Farbe wieder her.
+
+### Touchpoints
+
+- `chronogrid-core: mapping/EntryMapper.java#X_CG_COLOR` (Konstante,
+  neu) — Property-Name `X-CHRONOGRID-COLOR`
+- `chronogrid-core: mapping/EntryMapper.java#toEntry` (~Zeile 159) —
+  Reader: prefer COLOR, fallback X-CHRONOGRID-COLOR
+- `chronogrid-core: mapping/EntryMapper.java#toICalendarText`
+  (~Zeile 328) — Writer: `vevent.setColor(...)` und
+  `vevent.setExperimentalProperty(X_CG_COLOR, ...)` parallel
+- `chronogrid-core: test/EntryMapperColourSidechannelTest.java` (neu) —
+  5 Tests für Write-beide, Read-prefer-COLOR, Read-fallback,
+  Read-keine-Properties, blank-Sidechannel-ignoriert
+
+### Größe
+
+S. Drei kleine Änderungen in `EntryMapper` plus eine neue Test-
+Klasse (5 Tests). Geschätzt 30 Minuten inkl. SpotBugs.
+
+### Risiko / offene Fragen
+
+- **Andere Provider könnten COLOR korrekt round-trippen, aber
+  X-Properties nicht.** Unwahrscheinlich (X- gilt seit RFC 5545
+  von 2009 als Pflicht), aber theoretisch möglich. In dem Fall
+  bliebe COLOR erhalten und die App liest sie als primären Pfad —
+  also kein Datenverlust, nur kein Sidechannel-Backup. Akzeptabel.
+- **Bytes-Bloat im iCalendar-Body.** Jeder colour-Event trägt jetzt
+  ~25 zusätzliche Bytes. Bei tausenden Events in einem Kalender:
+  einige KB. Vernachlässigbar gegenüber dem typischen Event-
+  Footprint (Description, Location, Recurrence-Rules).
+- **iCloud könnte X-Properties später ebenfalls strippen.** Wenn
+  das je passiert: kein Sidechannel-Backup mehr verfügbar, BUG
+  re-opened, evtl. Workaround über CATEGORIES mit
+  Sonder-Prefix (Kollisionsrisiko mit BACKLOG #3-Tags). v1
+  hofft auf RFC-Konformität bei X-Properties.
+- **Andere Konsumenten (Apple Calendar, Thunderbird) könnten
+  `X-CHRONOGRID-COLOR` als Müll anzeigen.** Spec sagt: SHOULD
+  ignorieren wenn nicht verstanden. Apple Calendar und
+  Thunderbird sind beide spec-konform für X-Properties → keine
+  sichtbare Auswirkung.
+- **Andere Apps schreiben evtl. ihre eigenen X-Properties für
+  Farben** (z.B. `X-APPLE-CALENDAR-COLOR`, `X-OUTLOOK-COLOR`).
+  Reader v1 liest sie nicht — Folge-Idee für eine v2 wäre eine
+  Cross-Property-Fallback-Kette. Nicht für diesen Fix.
