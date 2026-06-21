@@ -405,7 +405,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
             calendar::today,       // Today
             this::onSlideForward,  // ▶ slide forward: one day
             calendar::next);       // ⏭ paging forward: full interval
-    return new CalendarNavigationBar(
+    CalendarNavigationBar bar = new CalendarNavigationBar(
         messages,
         LocalDateTime.now().toLocalDate(),
         CalendarNavigationBar.ViewMode.MONTH,
@@ -416,6 +416,35 @@ public class ChronoGrid extends Composite<VerticalLayout>
         },
         this::applyViewMode,
         this::applyNDays);
+    bar.setDayColoursProvider(this::coloursForDay);
+    return bar;
+  }
+
+  /**
+   * Feature #1: collects the set of calendar colours of all entries
+   * that overlap the given day. Drives the popover-adjacent indicator
+   * in {@link CalendarNavigationBar}. Goes through {@code service.findInRange}
+   * which the {@link com.vaadin.flow.component.html.Div main calendar}
+   * already uses — the call is idempotent and the underlying CalDAV
+   * cache typically holds the surrounding window already.
+   */
+  java.util.Set<String> coloursForDay(java.time.LocalDate day) {
+    if (day == null || service == null) {
+      return java.util.Collections.emptySet();
+    }
+    java.time.LocalDateTime from = day.atStartOfDay();
+    java.time.LocalDateTime to = day.plusDays(1).atStartOfDay();
+    try {
+      java.util.LinkedHashSet<String> colours = new java.util.LinkedHashSet<>();
+      rangeWithStatus(from, to).forEach(e -> {
+        String c = e.getColor();
+        if (c != null && !c.isBlank()) colours.add(c);
+      });
+      return colours;
+    } catch (RuntimeException ex) {
+      logger().info("coloursForDay({}) failed: {}", day, ex.toString());
+      return java.util.Collections.emptySet();
+    }
   }
 
   private void onSlideBack() {

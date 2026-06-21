@@ -33,8 +33,11 @@ import com.vaadin.flow.dom.Element;
 
 import java.time.LocalDate;
 import java.util.EnumMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.IntConsumer;
 
 /**
@@ -85,6 +88,9 @@ public final class CalendarNavigationBar
   private static final String K_VIEW_NDAYS = "calendar.nav.view.nDays";
   private static final String K_VIEW_MONTH = "calendar.nav.view.month";
   private static final String K_NDAYS_VALUE = "calendar.nav.nDays.value";
+  private static final String K_DAY_HINT_NONE = "calendar.nav.dayHint.none";
+  private static final String K_DAY_HINT_ONE = "calendar.nav.dayHint.one";
+  private static final String K_DAY_HINT_MANY = "calendar.nav.dayHint.many";
 
   private final DatePicker datePicker;
   private final Tabs viewTabs;
@@ -92,7 +98,18 @@ public final class CalendarNavigationBar
   private final Span nDaysValueLabel;
   private final HorizontalLayout nGroup;
   private final Div intervalLabel;
+  private final Div dayHintBadge;
   private final Map<ViewMode, Tab> tabsByMode = new EnumMap<>(ViewMode.class);
+
+  /**
+   * Resolves the set of calendar colours (CSS-coloured strings — hex,
+   * named, anything the consumer's calendars use) for a given day so
+   * the popover-adjacent indicator can paint dots in the originating
+   * calendars' colours. The function may return an empty set for days
+   * without entries; {@code null} is treated as empty.
+   */
+  private Function<LocalDate, Set<String>> dayColoursProvider =
+      d -> java.util.Collections.emptySet();
 
   /** Encapsulates the five navigation callbacks. */
   public record NavigationCallbacks(Runnable pageBack,
@@ -155,10 +172,31 @@ public final class CalendarNavigationBar
       if (e.getValue() != null) {
         logger().info("Nav: date jump -> {}", e.getValue());
         onDateChanged.accept(e.getValue());
+        refreshDayHint(e.getValue());
+      }
+    });
+    // Refresh the day-hint badge whenever the popover opens so the
+    // user sees an up-to-date indicator for the currently-focused
+    // date without having to commit a pick first.
+    datePicker.addOpenedChangeListener(e -> {
+      if (e.isOpened()) {
+        refreshDayHint(datePicker.getValue());
       }
     });
 
-    HorizontalLayout left = new HorizontalLayout(navGroup, datePicker);
+    // ── Feature #1: appointment indicator next to the DatePicker ──
+    // FullCalendar's popover does not expose a stable day-renderer
+    // hook in Vaadin 25, so the per-day dots that the original
+    // sketch envisaged inside the popover cannot ship freeze-safe.
+    // Instead, an adjacent badge updates on date-pick + popover-open
+    // and shows the count of events on the focused day plus a
+    // coloured dot for each contributing calendar — same information
+    // signal, reachable via stable Vaadin API.
+    dayHintBadge = new Div();
+    dayHintBadge.addClassName("chronogrid-nav__day-hint");
+    refreshDayHint(initialDate);
+
+    HorizontalLayout left = new HorizontalLayout(navGroup, datePicker, dayHintBadge);
     left.setAlignItems(FlexComponent.Alignment.END);
     left.setSpacing(true);
 
@@ -279,5 +317,65 @@ public final class CalendarNavigationBar
 
   public ViewMode currentMode() {
     return modeFor(viewTabs.getSelectedTab());
+  }
+
+  /**
+   * Wires an aggregator that resolves the set of calendar colours
+   * present on any given day. Called on every value-change and on
+   * every popover-open of the DatePicker; the badge next to the
+   * picker repaints accordingly. Pass an empty-returning function to
+   * effectively hide the badge.
+   */
+  public void setDayColoursProvider(Function<LocalDate, Set<String>> provider) {
+    this.dayColoursProvider = provider != null
+        ? provider
+        : d -> java.util.Collections.emptySet();
+    refreshDayHint(datePicker.getValue());
+  }
+
+  /** Visible for the browserless tests — keeps the contract explicit. */
+  public String dayHintTextForTesting() {
+    return dayHintBadge.getText();
+  }
+
+  private void refreshDayHint(LocalDate date) {
+    dayHintBadge.removeAll();
+    if (date == null) {
+      dayHintBadge.setVisible(false);
+      return;
+    }
+    Set<String> colours = dayColoursProvider.apply(date);
+    if (colours == null) colours = java.util.Collections.emptySet();
+    // Dedupe + preserve insertion order so the same calendar palette
+    // always renders the dots in the same order across rebuilds.
+    Set<String> ordered = new LinkedHashSet<>(colours);
+    int n = ordered.size();
+    Span text;
+    if (n == 0) {
+      text = new Span(messages.tr(K_DAY_HINT_NONE, "No events"));
+    } else if (n == 1) {
+      text = new Span(messages.tr(K_DAY_HINT_ONE, "1 calendar"));
+    } else {
+      text = new Span(messages.tr(K_DAY_HINT_MANY,
+          "{0} calendars", String.valueOf(n)));
+    }
+    text.addClassName("chronogrid-nav__day-hint-text");
+    dayHintBadge.add(text);
+    int painted = 0;
+    for (String colour : ordered) {
+      if (painted >= 3) break;   // cap visual width — extra runs via "+N"
+      if (colour == null || colour.isBlank()) continue;
+      Span dot = new Span();
+      dot.addClassName("chronogrid-nav__day-hint-dot");
+      dot.getStyle().set("background-color", colour);
+      dayHintBadge.add(dot);
+      painted++;
+    }
+    if (n > 3) {
+      Span overflow = new Span("+" + (n - 3));
+      overflow.addClassName("chronogrid-nav__day-hint-overflow");
+      dayHintBadge.add(overflow);
+    }
+    dayHintBadge.setVisible(true);
   }
 }

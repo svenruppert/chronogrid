@@ -10,53 +10,6 @@ Status-Legende: 🟡 geplant · 🔵 designed in BACKLOG · ⚫ blockiert / wart
 
 ---
 
-## #1 — Termin-Indikator pro Tag im „Zum Datum springen"-Popover
-
-> **Original:** Wenn man in dem Selector „zum Datum springen" ist,
-> soll man zu jedem Tag sehen, ob dort Termine sind.
-
-**Status:** 🟡 geplant
-
-### Konzept
-
-Im aufgeklappten DatePicker-Popover bekommt jeder Tag, an dem mindestens
-ein Termin liegt, einen dezenten visuellen Marker — ein kleiner Punkt
-(•) unter der Tageszahl. Maximal drei Punkte nebeneinander stehen für
-„Termine aus drei verschiedenen Kalendern", farblich in den
-Kalender-Farben. Ein einzelner grauer Punkt heißt „Termine vorhanden,
-aber irrelevant aus welchem Kalender" — Fallback wenn der Tag mehr als
-drei aktive Sub-Quellen hat.
-
-**Datenpfad:** Beim `opened-changed`-Event des DatePickers (oder via
-`MonthsChanged`-Listener wenn vorhanden) wird die sichtbare Range
-(typisch ±2 Monate um das gewählte Datum) aus den bereits-gefetchten
-Entries des Hauptgrids gezählt. Eine zusätzliche REPORT-Query gegen den
-Server vermeidet man — der Hauptgrid hat die Daten ohnehin im
-`EntryProvider`-Cache. Pro Tag wird ein `Map<LocalDate, Set<String>>`
-aufgebaut (Set der Kalender-Farben).
-
-**Render-Mechanik:** Vaadin 25 DatePicker rendert Tage über das
-`vaadin-date-picker-overlay-content`-Shadow-DOM. Über `::part(day)` oder
-einen Day-Renderer-Slot CSS-Custom-Properties pro Tag setzen
-(`--cg-day-colors: #1F77B4 #FF7F0E`). CSS rendert die Dots via
-`::after` mit `linear-gradient` o.ä.
-
-**Touchpoints:**
-- `chronogrid: ui/CalendarNavigationBar.java` — Popover-Open-Listener,
-  Daten-Aggregation
-- `chronogrid: META-INF/resources/frontend/styles/chronogrid.css` — Dot-Renderer
-- `chronogrid-core: service/CalendarService.java` — optionale
-  `countByDayInRange(...)` falls Cache-Pfad nicht reicht
-
-**Größe:** M. Hängt davon ab ob Vaadin 25's DatePicker einen Day-
-Renderer-Hook hat. Falls nein, Shadow-DOM-Patching (nicht-trivial).
-
-**Risiko:** Performance bei langen Ranges (mehrere Jahre rückwärts/
-vorwärts gescrollt). Lösung: nur sichtbares Monatsfenster aggregieren,
-nicht den ganzen Cache.
-
----
-
 ## #3 — Tags pro Eintrag + Cross-Kalender-Tag-Filter
 
 > **Original:** Ein Kalendereintrag soll eine Liste von Tags erhalten.

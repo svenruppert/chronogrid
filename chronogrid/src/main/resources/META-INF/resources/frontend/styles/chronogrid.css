@@ -325,3 +325,36 @@ vaadin-date-picker::part(today) {
 .fc .fc-timegrid-event {
     border-left-width: 4px;
 }
+
+/* ── Day-hint indicator next to the date picker (Feature #1) ── */
+
+.chronogrid-nav__day-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background-color: var(--lumo-contrast-5pct);
+    font-size: var(--lumo-font-size-xs);
+    color: var(--lumo-secondary-text-color);
+    line-height: 1;
+    height: 28px;
+    white-space: nowrap;
+}
+
+.chronogrid-nav__day-hint-text {
+    font-weight: 500;
+}
+
+.chronogrid-nav__day-hint-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--lumo-contrast-10pct);
+}
+
+.chronogrid-nav__day-hint-overflow {
+    font-variant-numeric: tabular-nums;
+    color: var(--lumo-tertiary-text-color);
+}

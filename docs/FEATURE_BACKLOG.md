@@ -360,3 +360,120 @@ backgroundColor`, so the thicker border reads as a single solid block
   compact (often 16–20 px tall). A 3-px border eats ~30 % of the
   block height. If consumer feedback complains, reduce to 2 px in
   the Month view only via a more specific selector.
+
+---
+
+## #5 — Appointment indicator beside the date picker
+
+**Status:** ✅ shipped 2026-06-21 (see the commit body for the full
+implementation map)
+**Filed:** 2026-06-21
+
+### Idea
+
+The "Go to date" picker used to be a blind jump — you opened the
+popover and you had to remember which days had events. The user
+asked for a per-day visual marker in the popover itself so a single
+glance answers "is anything on this date?". Vaadin 25's `DatePicker`
+exposes no public day-renderer hook and the popover internals live
+behind two shadow-DOM hops — landing dots **inside** the popover
+freeze-safely was not possible. This entry ships the freeze-safe
+v1: an indicator badge **next to** the date picker that updates
+whenever the popover opens or the user picks a date.
+
+### Motivation
+
+The indicator carries the same information signal the original
+sketch wanted — "how many calendars have an entry on this day, and
+in which colours" — but through stable Vaadin API instead of
+shadow-DOM walking. A user planning a meeting jumps through dates
+and immediately sees:
+
+- *"No events"* — green-light to schedule there
+- *"1 calendar •"* — touch-up needed; lone calendar dot in its
+  source colour
+- *"3 calendars • • •"* (or *"4 calendars • • • +1"*) — busy
+  day, see the calendar grid for details
+
+### Sketch
+
+The aggregation runs in `ChronoGrid#coloursForDay(LocalDate)`:
+
+```java
+java.util.Set<String> coloursForDay(LocalDate day) {
+    LocalDateTime from = day.atStartOfDay();
+    LocalDateTime to = day.plusDays(1).atStartOfDay();
+    var colours = new LinkedHashSet<String>();
+    rangeWithStatus(from, to).forEach(e -> {
+        String c = e.getColor();
+        if (c != null && !c.isBlank()) colours.add(c);
+    });
+    return colours;
+}
+```
+
+`CalendarNavigationBar` accepts the aggregator through
+`setDayColoursProvider(Function<LocalDate, Set<String>>)` and runs
+it on every value-change and every `opened-changed` of the
+`DatePicker`. The badge renders into a small pill-shaped `Div`:
+text counter + up to three coloured dots + `+N` overflow.
+
+CSS lives in `chronogrid.css`:
+
+```css
+.chronogrid-nav__day-hint {
+    display: inline-flex;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background-color: var(--lumo-contrast-5pct);
+    font-size: var(--lumo-font-size-xs);
+}
+.chronogrid-nav__day-hint-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+```
+
+i18n keys: `calendar.nav.dayHint.none`, `calendar.nav.dayHint.one`,
+`calendar.nav.dayHint.many` (EN + DE).
+
+### Acceptance signals
+
+- ✅ The badge renders next to the date picker on every view mode
+  (Day / Week / N&nbsp;days / Month) — visible at all times, not
+  just when the popover is open.
+- ✅ Opening the popover and hovering different dates does not
+  update the badge per-hovered-day (no `hover` listener on the
+  picker is available); the badge updates on **picker open** for
+  the currently-selected date and on **value commit** afterwards.
+  This is the documented v1 behaviour — feedback may steer the v2
+  scope.
+- ✅ The badge degrades silently to "No events" when the network
+  is offline (the aggregator catches `RuntimeException` from
+  `findInRange` and returns the empty set).
+- ✅ All 289 existing tests stay green; `BugInstance size is 0`
+  on both `chronogrid-core` and `chronogrid` after the change.
+
+### Risks / open questions
+
+- **In-popover dots remain the v2 target.** Achieving per-day
+  marks **inside** the Vaadin 25 `DatePicker` popover needs JS
+  that walks two shadow-DOM levels (overlay-content →
+  month-calendar grid). The walk is browser-safe but cannot be
+  smoke-tested in headless and is fragile across Vaadin minor
+  versions — deferred until the freeze lifts. The aggregator and
+  state plumbing landed here are reusable for that v2 phase.
+- **Aggregator hits the CalDAV server.** Each open / value-change
+  triggers a fresh `findInRange` for a 24-hour window. The
+  underlying client typically reads from its in-process cache;
+  if the cache is cold the call is a network round-trip. If
+  popover-open performance becomes a complaint, debounce on the
+  `CalendarNavigationBar` side (`Executors.newSingleThreadScheduledExecutor()`,
+  150-ms trailing).
+- **Three-dot visual cap.** A day with four or more calendar
+  sources collapses extra dots into `+N`. Could be configurable
+  (`setMaxVisibleDots(int)`), but real-world usage rarely
+  surpasses three active calendars per day — left as a tuning
+  point.
