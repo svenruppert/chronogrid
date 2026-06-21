@@ -267,3 +267,28 @@
     cursor: pointer;
     background: transparent;
 }
+
+/* ── Today anchor in the calendar grid (Feature #5) ──────────── */
+
+/* TimeGrid views (Day, Week, N-days): today's column body + its
+   header column get a subtle Lumo-primary tint and a stronger top
+   border on the header so the user can spot „where am I today?"
+   even when scrolled away from the current scroll position.
+   Placed after the zebra rules so the today colour wins via CSS
+   source order at equal specificity. */
+.fc .fc-timegrid-col.fc-day-today {
+    background-color: var(--lumo-primary-color-10pct);
+}
+.fc .fc-col-header-cell.fc-day-today {
+    border-top: 3px solid var(--lumo-primary-color);
+    font-weight: 600;
+}
+
+/* DayGrid (Month) view: today's cell + day-number badge. */
+.fc .fc-daygrid-day.fc-day-today {
+    background-color: var(--lumo-primary-color-10pct);
+}
+.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+    color: var(--lumo-primary-color);
+    font-weight: 700;
+}
