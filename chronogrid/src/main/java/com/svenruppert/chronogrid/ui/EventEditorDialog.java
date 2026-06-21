@@ -195,10 +195,31 @@ public final class EventEditorDialog
     Element colourPicker = new Element("input");
     colourPicker.setAttribute("type", "color");
     colourPicker.setAttribute("title", messages.tr(K_FIELD_COLOR, "Colour"));
-    colourPicker.setProperty("value",
-        storedEntryColor != null && !storedEntryColor.isBlank()
-            ? normaliseColor(storedEntryColor) : "#1f77b4");
+    String initialColour = storedEntryColor != null && !storedEntryColor.isBlank()
+        ? normaliseColor(storedEntryColor) : "#1f77b4";
+    colourPicker.setProperty("value", initialColour);
     colourPicker.getClassList().add("chronogrid-color-picker");
+
+    // BUG #1: the HTML5 <input type="color"> does not auto-sync its
+    // `value` back to the server. Without an explicit DOM listener,
+    // colourPicker.getProperty("value") on Save would return the
+    // initial value the server pushed — the user's actual pick
+    // never reaches the server. Mirror the same pattern the N-days
+    // slider uses (`addEventData("event.target.value")`) so the
+    // current colour is captured into a mutable holder on every
+    // 'change' / 'input' event; the Save handler reads from there.
+    String[] currentColour = { initialColour };
+    java.util.function.Consumer<com.vaadin.flow.dom.DomEvent> grabValue = ev -> {
+      tools.jackson.databind.JsonNode node =
+          ev.getEventData().get("event.target.value");
+      if (node == null) return;
+      String v = node.asString();
+      if (v != null && !v.isBlank()) currentColour[0] = v;
+    };
+    colourPicker.addEventListener("change", grabValue::accept)
+        .addEventData("event.target.value");
+    colourPicker.addEventListener("input", grabValue::accept)
+        .addEventData("event.target.value");
     Div pickerHost = new Div();
     pickerHost.getElement().appendChild(colourPicker);
     Span colourHint = new Span(messages.tr(K_FIELD_COLOR_HINT,
@@ -236,7 +257,7 @@ public final class EventEditorDialog
       entry.setCustomProperty(EntryMapper.CUSTOM_LOCATION, location.getValue());
       entry.setCustomProperty(EntryMapper.CUSTOM_URL, url.getValue());
       if (Boolean.TRUE.equals(colourEnabled.getValue())) {
-        String pickedColor = colourPicker.getProperty("value");
+        String pickedColor = currentColour[0];
         entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR,
             pickedColor == null || pickedColor.isBlank() ? null : pickedColor);
       } else {

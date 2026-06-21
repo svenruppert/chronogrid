@@ -31,67 +31,76 @@ als historischer Record mit Commit- bzw. Begründungs-Verweis.
 > aussucht, wired dieser nicht übernomen. In der Kalenderview wird
 > er auch immer noch in der selben Farbe angezeigt.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test (zweite Bruchstelle)
 **Filed:** 2026-06-21
 
 ### Analyse
 
-Es gibt zwei Code-Pfade, die die Entry-Farbe setzen, und der
-zweite hebelt den ersten aus:
+**Update 2026-06-21 nach dem ersten Browser-Smoke-Test:** Bug
+besteht aus **zwei** Bruchstellen, die beide gefixt werden müssen.
+Der erste Commit (`246dade`) hat nur die Render-seitige Bruchstelle
+behoben — die Save-seitige war noch da. Sven hat das beim Smoke-Test
+korrekt aufgedeckt: „Farbe ausgewählt, Speichern gedrückt, Dialog
+ist weg, aber die Farbe ist gleich geblieben."
 
-1. **Korrekter Pfad** in `CalendarService.applyColours(Entry,
-   calendarColor)` (chronogrid-core, Zeile 225):
+**Bruchstelle (A) — Save-Pfad, EventEditorDialog (Zeile 195–201).**
 
-   ```java
-   String individualColor = entry.getCustomProperty(
-       EntryMapper.CUSTOM_ENTRY_COLOR);
-   if (individualColor != null && !individualColor.isBlank()) {
-     entry.setBackgroundColor(individualColor);
-     entry.setBorderColor(calendarColor);
-   } else {
-     entry.setColor(calendarColor);
-   }
-   ```
+```java
+Element colourPicker = new Element("input");
+colourPicker.setAttribute("type", "color");
+colourPicker.setProperty("value", initialColour);   // server → client
+// ❌ kein addEventListener/addPropertyChangeListener
+```
 
-   Liest die nutzergewählte Farbe aus `CUSTOM_ENTRY_COLOR` und
-   splittet sauber in Fill (eigene Farbe) + Border (Kalender-
-   Farbe) — exakt das, was BACKLOG #1 spezifiziert.
+Der native HTML5 `<input type="color">` wird über Vaadin's
+Element-API erzeugt. Vaadin synct die `value`-Property **nicht
+automatisch** vom Client zurück zum Server für native Elemente —
+der Code-Pfad existiert nur für „echte" Vaadin-Komponenten mit
+expliziter Property-Sync-Annotation oder für Elemente, deren
+DOM-Events mit `addEventData(...)` instrumentiert wurden. Folge:
+beim Save-Klick liefert `colourPicker.getProperty("value")`
+**immer noch den initialen Server-Wert**, nicht die User-
+Auswahl. Die User-Auswahl reicht nie über die Browser-Grenze.
 
-2. **Brechender Pfad** in `ChronoGrid.applySubscriptionColor(
-   Entry, Map<URI,String>)` (chronogrid, Zeile 782):
+Save-Handler liest also dauerhaft `#1f77b4` (Default) oder den
+zuletzt gespeicherten Wert, schreibt das brav in
+`CUSTOM_ENTRY_COLOR`, iCalendar trägt's, und nach Reload zeigt der
+Dialog wieder den selben Wert.
 
-   ```java
-   for (Map.Entry<URI, String> e : colors.entrySet()) {
-     if (src.startsWith(e.getKey().toString())) {
-       entry.setColor(e.getValue());   // ← überschreibt ALLES
-       return;
-     }
-   }
-   ```
+**Fix (A):** dasselbe Pattern wie der N-days-Slider in
+`CalendarNavigationBar` — `addEventListener("change", …)` und
+`addEventListener("input", …)`, je mit `addEventData(
+"event.target.value")`, in einen mutable Holder
+(`String[] currentColour`) cachen. Save liest aus dem Holder
+statt aus `getProperty(...)`.
 
-   Wird in der Fan-Out-Pipeline von `rangeWithStatus` (Zeile 690)
-   **nach** `applyColours` aufgerufen, um die Per-Subscription-Farb-
-   wahl des Nutzers über die CalDAV-Server-seitige Farbe zu legen.
-   Ruft jedoch `entry.setColor(...)` (FullCalendar's "set both
-   border and background to this colour") — und kippt damit den
-   gerade frisch gesetzten Per-Event-Background. Sowohl Fill als
-   auch Border tragen ab diesem Moment die Subscription-Farbe.
+**Bruchstelle (B) — Render-Pfad, ChronoGrid.applySubscriptionColor
+(behoben in `246dade`).**
 
-**Wo der korrekte Save-Pfad endet:** Im `EventEditorDialog`
-(chronogrid, Zeilen 226–231) wird die Farbe ordnungsgemäß in
-`CUSTOM_ENTRY_COLOR` geschrieben; `EntryMapper.toICalendarText`
-schreibt sie als VEVENT-COLOR-Property in die iCalendar-Daten;
-beim nächsten `findInRange` liest `EntryMapper.toEntry` sie wieder
-in `CUSTOM_ENTRY_COLOR` zurück. **Bis hierhin ist alles korrekt.**
-Der Wert geht erst beim Render-Pre-Processing in der ChronoGrid-
-Stage verloren.
+`CalendarService.applyColours(entry, calendarColor)` macht es
+korrekt: liest `CUSTOM_ENTRY_COLOR`, splittet in
+`setBackgroundColor(individualColor)` + `setBorderColor(
+calendarColor)`. Aber `ChronoGrid.applySubscriptionColor(...)`
+ruft danach in der Fan-Out-Pipeline `entry.setColor(...)`
+unbedingt auf und überschreibt damit Fill + Border mit der
+Subscription-Farbe.
 
-**Fix-Pfad:** `ChronoGrid.applySubscriptionColor` muss statt
-`entry.setColor(subColour)` zu rufen an `CalendarService.applyColours(
-entry, subColour)` delegieren. Damit bleibt die per-Event-Layering-
-Logik in einer einzigen Code-Stelle, und die Subscription-Farbe
-gewinnt korrekt nur über die Kalender-Default-Farbe — nicht über
-die nutzergewählte Per-Event-Farbe.
+**Fix (B):** `applySubscriptionOverride` als neue Methode in
+`CalendarService` (chronogrid-core), die intern an `applyColours`
+delegiert. Bereits eingebaut in `246dade`.
+
+**Zusammenhang der beiden Bruchstellen:** B war versteckt hinter
+A. A allein bedeutete: die Farbe kommt nie als
+`CUSTOM_ENTRY_COLOR` am Entry an → `applyColours` rennt immer in
+den uniform-Branch (`setColor(calendarColor)`) → es gibt keinen
+Per-Event-Override, den B zerstören könnte. Erst wenn A gefixt
+ist, wird B sichtbar. Hätte B nicht parallel mit A gefixt werden
+müssen, wäre der Bug auch nach dem A-Fix nur teilweise behoben
+(Fill wäre korrekt, aber sofort vom Subscription-Override wieder
+überschrieben).
+
+Beide Fixes zusammen → komplette Behebung. (A) ist im zweiten
+Commit auf dem Bug, (B) war im ersten.
 
 ### Betroffene Features
 
@@ -143,30 +152,39 @@ Nicht direkt betroffen, aber verwandt:
 **Verifikation der Datenseite:** Im DevTools / Server-Log nach Save
 prüfen, dass die iCalendar-Daten die COLOR-Property tragen
 (`COLOR:#ff0000` o.ä.). Wenn ja → Daten-Pfad ok, Render-Pfad ist
-schuld. Wenn nein → der Save-Pfad selbst ist defekt.
+schuld. Wenn nein → der Save-Pfad selbst ist defekt. Im konkreten
+Fall: COLOR fehlte → Save-Pfad (A) defekt.
 
 ### Touchpoints
 
-- `chronogrid: ui/ChronoGrid.java#applySubscriptionColor` (Zeile
-  782–794) — **primäre Bug-Stelle**, delegiert nicht an
-  `CalendarService.applyColours`
-- `chronogrid: ui/ChronoGrid.java#rangeWithStatus` (Zeile 690) —
-  Aufrufstelle der broken `applySubscriptionColor`
-- `chronogrid-core: service/CalendarService.java#applyColours`
-  (Zeile 225–236) — der korrekte Pfad, an den delegiert werden muss
+- `chronogrid: ui/EventEditorDialog.java` (Zeile 195 ff.) — **Bug-Stelle (A)**:
+  HTML5-Color-Picker ohne Property-Sync. Fix: `addEventListener
+  ("change"/"input", …).addEventData("event.target.value")` + mutable
+  Holder, der vom Save-Handler gelesen wird.
+- `chronogrid: ui/ChronoGrid.java#applySubscriptionColor` (Zeile 782
+  alt) — **Bug-Stelle (B)**, gelöscht. Aufruf-Stelle in
+  `rangeWithStatus` (Zeile 690) ruft jetzt die zentrale
+  `CalendarService.applySubscriptionOverride`.
+- `chronogrid-core: service/CalendarService.java#applyColours` /
+  `applySubscriptionOverride` (Zeile 225 ff. / 245 ff.) — die
+  korrekte Single-Source-of-Truth-Logik. `applySubscriptionOverride`
+  ist im selben Commit wie der B-Fix neu hinzugekommen.
 - `chronogrid-core: mapping/EntryMapper.java` — `CUSTOM_ENTRY_COLOR`-
-  Konstante und VEVENT-COLOR-Roundtrip (zur Verifikation, nicht
-  Bug-Stelle)
-- `chronogrid: ui/EventEditorDialog.java` (Zeile 226–231) — Save-
-  Pfad mit Color-Picker; sollte unverändert bleiben
+  Konstante und VEVENT-COLOR-Roundtrip; ist korrekt, nicht
+  angefasst.
 
 ### Größe
 
-S. Eine Zeile in `applySubscriptionColor` ersetzen
-(`entry.setColor(e.getValue())` → `CalendarService.applyColours(
-entry, e.getValue())`) plus ein Test, der den Per-Event-vs-
-Subscription-Override-Pfad explizit absichert. Geschätzt 30–60
-Minuten inkl. Tests + SpotBugs + manueller Verifikation.
+S+S. Zwei kleine Punkte:
+- (A) ~20 Zeilen in `EventEditorDialog` (Event-Listener +
+  mutable Holder). Test fehlt — würde Vaadin-UI-Mock brauchen,
+  v1 verlässt sich auf den Browser-Smoke-Test.
+- (B) 1 Zeile in `ChronoGrid` (Delegation an
+  `applySubscriptionOverride`), neue Methode + 4 Unit-Tests in
+  `CalendarServiceColoursTest`.
+
+Geschätzt insgesamt ~60 Minuten inkl. Tests + SpotBugs + zwei
+Browser-Smoke-Test-Iterationen.
 
 ### Risiko / offene Fragen
 
