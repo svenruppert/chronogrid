@@ -432,7 +432,7 @@ SpotBugs + Diagnose-Lauf, plus dritten Browser-Smoke-Test.
 > der einen bunten Balken hat, friert die Anwendung ein und ich
 > muss ein Pagereload machen.
 
-**Status:** 🔬 analysiert
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-21
 
 ### Analyse

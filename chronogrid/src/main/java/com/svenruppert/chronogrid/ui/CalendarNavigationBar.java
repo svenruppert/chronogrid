@@ -562,21 +562,36 @@ public final class CalendarNavigationBar
     + "}\n"
     // Document-wide search bypasses any overlay-content scoping
     // issues — vaadin overlays can portal anywhere.
+    // BUG #3 re-entrancy guard. The MutationObserver below listens
+    // to attribute changes from Vaadin (cell.part, cell.aria-label
+    // change on month scroll). When the user clicks a day cell
+    // Vaadin's selection logic ALSO changes attributes on the cell
+    // — that triggers our observer → paintAll runs → paintAll's
+    // own setAttribute calls would trigger the observer again →
+    // infinite loop → frozen browser. The window-level flag short-
+    // circuits the recursive call so we never re-enter while a
+    // paint is already in flight.
     + "function paintAll(){\n"
-    + "  const docMonths=Array.from(document.querySelectorAll('vaadin-month-calendar'));\n"
-    + "  const recursed=collectMonths(document.body);\n"
-    + "  const seen=new Set(docMonths);\n"
-    + "  recursed.forEach(m=>seen.add(m));\n"
-    + "  const cals=Array.from(seen);\n"
-    + "  let cellsTotal=0,cellsPainted=0;\n"
-    + "  cals.forEach(mc=>{\n"
-    + "    ensureStyle(mc);\n"
-    + "    const cells=collectCells(mc);\n"
-    + "    cellsTotal+=cells.length;\n"
-    + "    cells.forEach(c=>{paint(c); if(c.hasAttribute('data-cg-events')) cellsPainted++;});\n"
-    + "  });\n"
-    + "  console.debug(TAG,'paintAll: calendars=',cals.length,'cells=',cellsTotal,'painted=',cellsPainted);\n"
-    + "  return {cals:cals.length,cells:cellsTotal,painted:cellsPainted};\n"
+    + "  if(window.__cgPaintBusy) return {cals:0,cells:0,painted:0};\n"
+    + "  window.__cgPaintBusy=true;\n"
+    + "  try {\n"
+    + "    const docMonths=Array.from(document.querySelectorAll('vaadin-month-calendar'));\n"
+    + "    const recursed=collectMonths(document.body);\n"
+    + "    const seen=new Set(docMonths);\n"
+    + "    recursed.forEach(m=>seen.add(m));\n"
+    + "    const cals=Array.from(seen);\n"
+    + "    let cellsTotal=0,cellsPainted=0;\n"
+    + "    cals.forEach(mc=>{\n"
+    + "      ensureStyle(mc);\n"
+    + "      const cells=collectCells(mc);\n"
+    + "      cellsTotal+=cells.length;\n"
+    + "      cells.forEach(c=>{paint(c); if(c.hasAttribute('data-cg-events')) cellsPainted++;});\n"
+    + "    });\n"
+    + "    console.debug(TAG,'paintAll: calendars=',cals.length,'cells=',cellsTotal,'painted=',cellsPainted);\n"
+    + "    return {cals:cals.length,cells:cellsTotal,painted:cellsPainted};\n"
+    + "  } finally {\n"
+    + "    window.__cgPaintBusy=false;\n"
+    + "  }\n"
     + "}\n"
     // Polling retry: first popover-open often hits before the
     // overlay finishes mounting. Up to 10 retries × 60 ms gives the
@@ -597,7 +612,17 @@ public final class CalendarNavigationBar
     + "    if(node.shadowRoot){\n"
     + "      if(!node.__cgObs){\n"
     + "        const o=new MutationObserver(()=>paintAll());\n"
-    + "        o.observe(node.shadowRoot,{subtree:true,childList:true,attributes:true,characterData:true});\n"
+    // BUG #3: scope the attribute listener to what Vaadin actually
+    // mutates when cells move between months ('part', 'aria-label')
+    // — NOT to every attribute change. Without this filter, the
+    // observer also picked up our own 'data-cg-events' writes and
+    // looped infinitely on day-cell selection. childList +
+    // characterData stay open so cell-text-content changes during
+    // month scrolling still trigger a repaint.
+    + "        o.observe(node.shadowRoot,{\n"
+    + "            subtree:true,childList:true,characterData:true,\n"
+    + "            attributes:true,attributeFilter:['part','aria-label']\n"
+    + "        });\n"
     + "        node.__cgObs=o;\n"
     + "      }\n"
     + "      node.shadowRoot.querySelectorAll('*').forEach(el=>installObs(el,depth+1));\n"
