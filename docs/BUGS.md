@@ -237,7 +237,7 @@ Browser-Smoke-Test-Iterationen.
 > iCloud-Web-UI bearbeitet wird, kommt er ohne unsere COLOR-
 > Property zurück.)*
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test (dritter Anlauf, Hybrid-Architektur)
+**Status:** ✅ behoben 2026-06-21 in `7ac73ca` (Hybrid: RFC-COLOR + DESCRIPTION-Marker + lokaler Per-UID-Store). Sven-verifiziert: Farbe bleibt nach iCloud-UI-Edit erhalten. Die zwei vorigen Anläufe (`0bd1243` X-Sidechannel, `bb35954` Diagnose-Lauf) sind in der Analyse als Iterationsgeschichte offen dokumentiert.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -424,4 +424,346 @@ SpotBugs + Diagnose-Lauf, plus dritten Browser-Smoke-Test.
   (regex ist kurz, anchored am Ende, fast immer Cache-Miss bei
   Events ohne Marker).
 
-## BUG - Wenn ich einen Tag in den Datumsselektor anklicke der einen bunten Balken hat, friert die Anwendung ein und ich muss ein Pagereload machen
+---
+
+## #3 — Datumsselektor friert ein wenn ein Tag mit Farbbalken angeklickt wird
+
+> **Original:** Wenn ich einen Tag in den Datumsselektor anklicke
+> der einen bunten Balken hat, friert die Anwendung ein und ich
+> muss ein Pagereload machen.
+
+**Status:** 🔬 analysiert
+**Filed:** 2026-06-21
+
+### Analyse
+
+Hochwahrscheinlich ein **MutationObserver-Endlosloop** im
+Popover-Walker den ich für Feature #5 (Per-day appointment dots)
+geschrieben habe.
+
+Code-Stelle: `CalendarNavigationBar.POPOVER_WALKER_JS` Zeile 600:
+
+```js
+o.observe(node.shadowRoot, {
+    subtree: true,
+    childList: true,
+    attributes: true,        // ← ungefilterter Attribute-Listener
+    characterData: true
+});
+```
+
+Klick-Sequenz die zum Freeze führt:
+
+1. User klickt Tag mit Balken im Popover-Calendar.
+2. Vaadin's `<vaadin-month-calendar>` markiert die Zelle als
+   selected/focused → ändert `part`-Attribut der Zelle.
+3. Mein MutationObserver feuert (lauscht auf JEDE
+   Attribute-Änderung im Subtree).
+4. `paintAll()` läuft → walks all cells → ruft `paint(c)` auf
+   jeder Zelle → `paint(c)` setzt selber wieder Attribute
+   (`cell.setAttribute('data-cg-events', …)`) und
+   inline-styles (`cell.style.setProperty('--cg-day-bg', …)`).
+5. Das Setzen unserer Attribute triggert wieder den
+   MutationObserver.
+6. **Endlosschleife im JS-Thread** → Browser eingefroren → nur
+   noch Page-Reload hilft.
+
+**Fix-Pfad:**
+
+(A) `attributeFilter: ['part']` setzen — der Observer feuert nur
+noch wenn Vaadin das `part`-Attribut (z.B. selected/focused)
+ändert. Unsere `data-cg-events` Schreibvorgänge ignoriert er.
+
+(B) Zusätzlich Re-Entrancy-Guard: vor `paintAll()` den Observer
+mit `obs.disconnect()` pausieren, nach Abschluss mit
+`obs.observe(...)` wieder anhängen. Doppelte Sicherung gegen
+zukünftige Selektor-Erweiterungen.
+
+(C) Selbst-Attribute-Filter im paint(): wenn der gewünschte
+Wert dem aktuellen entspricht, gar nicht setzen — Mutation
+würde sonst per identitäts-Schreiben weiter feuern. Eher
+Mikrooptimierung als Pflicht-Fix.
+
+Empfehlung: (A) + (B) zusammen, das ist die robuste Lösung.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #5** — *Per-day appointment dots inside
+  the date-picker popover*: das Feature ist direkt der Verursacher.
+  Bug wurde durch die MutationObserver-Logik aus dem `b1c2429`
+  Commit eingeschleppt. Acceptance-Signal „Scrolling months
+  inside the popover re-paints via the recursive MutationObserver
+  chain" gilt weiter, muss aber um „und Klicks auf Tageszellen
+  triggern KEINEN Endlosloop" ergänzt werden.
+
+### Reproduktion
+
+1. App starten, Kalender mit Einträgen (= farbige Balken im
+   Popover).
+2. „Zu Datum springen"-DatePicker öffnen → mindestens ein Tag
+   hat einen Balken.
+3. Auf diesen Tag klicken.
+4. Browser-Tab friert ein, Vaadin-Loading-Indicator dreht
+   endlos, App reagiert nicht mehr.
+5. DevTools Performance: ein einzelner JS-Task läuft seit
+   mehreren Sekunden ohne Yield → typischer Sync-Loop.
+
+**Erwartet:** Klick auf den Tag → Date wird gewählt → Popover
+schließt → Hauptkalender springt zum gewählten Datum.
+
+**Tatsächlich:** Klick → Freeze.
+
+### Touchpoints
+
+- `chronogrid: ui/CalendarNavigationBar.java#POPOVER_WALKER_JS`
+  (Zeile ~600) — MutationObserver-Setup ohne attributeFilter +
+  ohne Re-Entrancy-Guard.
+
+### Größe
+
+S. Zwei JS-String-Anpassungen in einer einzigen Konstante. 15
+Minuten inkl. Browser-Smoke-Test. Tests sind schwierig
+(JS-Verhalten lässt sich headless nicht reproduzieren) — wir
+verlassen uns auf die manuelle Verifikation.
+
+### Risiko / offene Fragen
+
+- **AttributeFilter könnte zu restriktiv sein.** Wenn Vaadin
+  irgendwann zusätzlich `aria-selected` oder andere Attribute
+  für relevante Zustandsänderungen nutzt, müssten wir die
+  Liste erweitern. v1 startet mit `['part']` und erweitert nach
+  Bedarf.
+- **Disconnect/Reconnect könnte einen Render-Frame verpassen.**
+  Wenn zwischen disconnect und re-observe ein Cell-Update
+  passiert, sehen wir's nicht. In der Praxis: paintAll() läuft
+  synchron → die einzigen Mutations die wir verpassen sind die
+  von paintAll selbst → genau die, die wir verpassen WOLLEN.
+  Akzeptabel.
+
+---
+
+## #4 — Multi-Kalender + Reload: alle Termine verschwinden aus der UI
+
+> **Original:** Wenn ich mehr als einen Kalender verbunden habe,
+> dann bringt ein Re-Load nichts mehr - Alle Termine weg in der
+> UI.
+
+**Status:** 🟡 erfasst — Hypothesen vorhanden, brauche Server-Log nach Reload-Klick zur Bestätigung
+**Filed:** 2026-06-21
+
+### Analyse
+
+Brauche noch Daten zur sicheren Diagnose, aber mehrere
+Bruchstellen sind denkbar. Drei wahrscheinlichste Pfade,
+sortiert nach Plausibilität basierend auf bisherigen Logs:
+
+**Hypothese A — Discovery-State-Verlust bei Reload.** In den
+früheren Logs sehe ich:
+
+```
+CalendarService ready: primary=https://caldav.icloud.com/ readClients=1
+  ↓ Discovery
+Discovery step 3: found 6 calendar(s) under https://p124-caldav.icloud.com:443/...
+CalendarService ready: primary=https://p124-caldav.icloud.com:443/.../ readClients=2
+```
+
+Initial ist nur die Legacy-Primary-URI (`caldav.icloud.com`) als
+Client da; die liefert HTTP 403. Erst Discovery erweitert auf
+die echten Per-Kalender-URIs. Wenn ein Reload-Klick die
+Discovery-State zurücksetzt aber nicht neu triggert, hätten wir
+wieder readClients=1 mit 403 → keine Entries → UI leer.
+**Wahrscheinlichkeit: hoch.**
+
+**Hypothese B — `visibleUris()` Logik filtert alle Subscriptions
+weg.** In `ChronoGrid#visibleUris` (Zeile 1280):
+
+```java
+if (subs.isEmpty()) return null;       // null = "no filter" - alle durchlassen
+Set<URI> out = new HashSet<>();
+for (CalendarSubscription cs : subs) {
+    if (cs.visible()) out.add(cs.uri());
+}
+return out;
+```
+
+Wenn nach Reload alle Subscriptions als `visible=false` markiert
+sind (z.B. weil eine Re-Initialization sie default-unsichtbar
+setzt), kommt ein **leeres Set** zurück (nicht null!) und der
+Filter in `rangeWithStatus` (Zeile 687–700) wirft alle Entries
+raus. **Wahrscheinlichkeit: mittel.**
+
+**Hypothese C — Auth/Session-Verlust bei Reload.** Reload triggert
+ein UI-Rebuild, der CalendarService wird neu konstruiert, aber
+ohne die korrekten App-Specific-Passwords aus dem State. Folge:
+alle Clients geben 401/403 zurück. Im Log wäre das sichtbar als
+HTTP-Status-Lines pro Client. **Wahrscheinlichkeit: mittel.**
+
+**Verifikation:** Sven, falls du den Bug reproduzieren willst —
+machen, dann Server-Log auf die Sequenz von Lines unmittelbar
+nach dem Reload-Click hier reinpasten:
+- `CalendarService ready: …` Zeilen (zeigt readClients)
+- `REPORT VEVENT … -> N entries` oder `-> HTTP …` (zeigt
+  Fetch-Resultat)
+- `fanOut across N client(s) produced X entries total`
+- `visibleUris` falls relevant — kann ich ad-hoc-Logger
+  hinzufügen wenn die obigen nicht reichen
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1, #2, #3, #4, #5, #6** — der Bug verhindert
+  jeden Read-Pfad in der App; **alle** Features die Termine
+  rendern sind effektiv unbenutzbar. Keine direkte Feature-
+  Spezifität — das ist Infrastruktur-Layer (CalDAV-Multi-
+  Client-Subscription-Fetch).
+
+### Reproduktion
+
+1. App starten, mehr als einen iCloud-Kalender als Subscriptions
+   konfigurieren.
+2. Termine im Grid sichtbar — passt.
+3. Reload-Button in der Toolbar klicken (Refresh-Icon).
+4. **Tatsächlich:** Termine verschwinden aus der UI. Auch
+   weiteres Reload bringt sie nicht zurück.
+
+**Erwartet:** Reload re-fetcht die Termine aus allen
+konfigurierten Subscriptions; UI zeigt sie wieder an.
+
+### Touchpoints (vermutet)
+
+- `chronogrid: ui/ChronoGrid.java#refresh-Button-Handler`
+  (Zeile 383–389) — ruft `calendar.getEntryProvider().refreshAll()`
+- `chronogrid: ui/ChronoGrid.java#visibleUris` (Zeile 1280) — wenn
+  Hypothese B
+- `chronogrid: ui/ChronoGrid.java#rangeWithStatus` (Zeile 660+) —
+  Fetch + Filter-Pipeline
+- `chronogrid-core: service/CalendarService.java#fanOut` — wenn
+  Hypothese A/C
+- `chronogrid-core: client/CalDavDiscovery.java` — wenn Hypothese A
+
+### Größe
+
+Unbekannt bis Ursache eindeutig. Wenn Hypothese A → M (Discovery-
+State-Persistenz zwischen Reloads). Wenn B → S (`visible()`-Default
+korrigieren). Wenn C → M (Auth-State-Management). Erste Klärung
+braucht Log-Dump nach Reload-Klick.
+
+### Risiko / offene Fragen
+
+- **Reproduzierbarkeit unsicher.** Tritt der Bug bei jedem
+  Reload auf oder nur unter bestimmten Bedingungen (z.B. nur
+  nach Auth-Refresh, nur nach Subscriptions-Dialog-Eingriff)?
+- **Multi-Account-Frage:** sind die „mehr als einen Kalender"
+  zwei iCloud-Accounts oder zwei Kalender desselben Accounts?
+  Macht Diagnose unterschiedlich.
+
+---
+
+## #5 — Per-Event-Farbe nicht sichtbar bei timed Events (nur bei Tagesterminen erkennbar)
+
+> **Original:** Ein Kalendereintrag mit einer eigenen Farbe -
+> keine Farbkennung der eigenen Farbe wenn der Termin kein
+> Tagestermin ist.
+
+**Status:** 🟡 erfasst — Hypothese vorhanden, brauche DevTools-Inspect zur Bestätigung
+**Filed:** 2026-06-21
+
+### Analyse
+
+FullCalendar v6 rendert AllDay- und Timed-Events durch
+**unterschiedliche** CSS-Klassen mit unterschiedlichem Box-Modell:
+
+| Event-Typ | Klasse | Wo gerendert | Farb-Mechanismus |
+|---|---|---|---|
+| AllDay-Termin | `.fc-daygrid-event` | DayGrid (Month + AllDay-Row) | Background-Fill der Box |
+| Timed-Termin | `.fc-timegrid-event` | TimeGrid-Spalten (Day/Week/N-days) | Background-Fill + meist Border-Left als Provenance-Kennung |
+
+Unsere CSS-Regeln (aus BACKLOG #4 für stärkere Borders):
+
+```css
+.fc .fc-event             { border-width: 3px; }
+.fc .fc-timegrid-event    { border-left-width: 4px; }
+```
+
+**Hypothese A — Border verschlingt den Fill bei kleinen Timed-
+Events.** Ein 30-Minuten-Termin in der TimeGrid ist typisch
+~30–40 px hoch. Mit `border-width: 3px` rundherum und
+`border-left-width: 4px` bleibt für den Fill nur eine schmale
+Mittelfläche — bei dunklen Border-Farben optisch fast
+unsichtbar. **Wahrscheinlichkeit: hoch.**
+
+**Hypothese B — TimeGrid-Renderer setzt eigene
+background-color-Inline-Styles, die unsere `setBackgroundColor`
+überschreiben.** Manche FullCalendar-Add-ons (inkl. Vaadin
+Stefan) rendern Timed-Events über `event.classNames`-Hooks oder
+inline-style-Overrides. Wenn das Inline-Style aus dem TimeGrid-
+Pfad nach unserem `setBackgroundColor` ankommt, hätten wir den
+Fill verloren. **Wahrscheinlichkeit: mittel.**
+
+**Hypothese C — `applyColours` setzt `setBackgroundColor` aber
+nicht `setColor`.** FullCalendar's `setColor()` setzt sowohl
+backgroundColor als auch borderColor. Wenn der TimeGrid-Renderer
+auf `color` (statt `backgroundColor`) schaut, sehen wir nichts.
+**Wahrscheinlichkeit: niedrig** (FullCalendar-Doku sagt
+backgroundColor wirkt für beide Pfade), aber prüfen.
+
+**Verifikation (Sven kann das selbst machen):**
+
+- Termin mit eigener Farbe im Week-View ansehen (= TimeGrid).
+- DevTools Elements: Rechtsklick auf den Event-Block →
+  Computed Styles → `background-color`.
+- Wenn `background-color` = unsere Farbe → Hypothese A
+  (Border erstickt den Fill optisch).
+- Wenn `background-color` = Kalender-Farbe oder undefined →
+  Hypothese B/C (Style-Konflikt).
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1** — *Per-event colour with a
+  calendar-coloured edge stripe*: das Feature, das hier
+  unsichtbar bleibt. Acceptance-Signal galt für AllDay-Events
+  aber nicht für Timed-Events.
+- **FEATURE_BACKLOG.md #4** — *Stronger event borders for visible
+  provenance*: vermutlicher Verursacher von Hypothese A (3px-
+  Border in der kleinen TimeGrid-Box).
+
+### Reproduktion
+
+1. Termin mit eigener Farbe (z.B. Rot) anlegen, **nicht** als
+   Tagestermin (z.B. 10:00–11:00).
+2. In Day- oder Week-View wechseln.
+3. **Tatsächlich:** Termin sieht aus wie ein normaler Kalender-
+   Termin, keine erkennbare Farbabweichung.
+
+**Erwartet:** Termin-Box hat sichtbaren roten Fill, blauen
+(Kalender-)Border drumherum.
+
+### Touchpoints (vermutet)
+
+- `chronogrid: src/main/resources/META-INF/resources/frontend/styles/chronogrid.css`
+  — wenn Hypothese A: TimeGrid-spezifische Regeln müssen den
+  Fill respektieren (z.B. `.fc-timegrid-event { padding-top: 2px; }`
+  oder `border-width` reduzieren)
+- `chronogrid-core: service/CalendarService.java#applyColours`
+  (Zeile 225–236) — wenn Hypothese B/C: zusätzlich `setColor()`
+  rufen oder via JS-Hook das Inline-Style setzen
+- FullCalendar v6 docs zu eventColor / backgroundColor /
+  borderColor in TimeGrid
+
+### Größe
+
+S–M, abhängig von Hypothese. A → CSS-Tweak (S, 15 min). B/C →
+müsste den TimeGrid-Render-Path durchgehen + ggf. Vaadin Stefan
+Add-on inspizieren (M, 30–60 min).
+
+### Risiko / offene Fragen
+
+- **A-Fix könnte BACKLOG #4 abschwächen.** Wenn wir den Border
+  bei TimeGrid-Events reduzieren, ist die Provenance-Kennung
+  in TimeGrid weniger prominent. Trade-off: ohne sichtbare
+  eigene Farbe ist die Provenance-Kennung sowieso nutzlos —
+  besser etwas weniger Border als gar kein Fill.
+- **B/C könnte einen JS-Hook brauchen.** Wenn FullCalendar bzw.
+  das Vaadin Stefan Add-on `setBackgroundColor` in TimeGrid
+  ignoriert, müssen wir per `eventDidMount`-Callback (JS) das
+  background per Inline-Style aufzwingen. Nicht-trivial, ähnlich
+  wie der Popover-Walker in Feature #5.
