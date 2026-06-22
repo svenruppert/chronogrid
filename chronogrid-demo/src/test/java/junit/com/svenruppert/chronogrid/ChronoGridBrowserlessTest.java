@@ -367,6 +367,61 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #7 Schicht 2: openConnectionWizard mounts a 3-step dialog with iCloud preset + nav buttons")
+  void connectionWizardDialogStructure() throws Exception {
+    AppUser user = new AppUser(92L, "Wizard User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    navigate(CalendarRouteView.class);
+    ChronoGrid view = findCalendarView();
+    java.lang.reflect.Method openWizard =
+        ChronoGrid.class.getDeclaredMethod("openConnectionWizard");
+    openWizard.setAccessible(true);
+    com.vaadin.flow.component.dialog.Dialog dialog =
+        (com.vaadin.flow.component.dialog.Dialog) openWizard.invoke(view);
+
+    assertEquals("calendar-wizard", dialog.getId().orElse(null),
+        "wizard dialog must carry the test selector id");
+
+    // Component-level walk only reaches the dialog body slot; the
+    // footer (Back/Next/Cancel) lives in a portal'd overlay slot
+    // that isn't exposed to dialog.getChildren() or to a UI-tree
+    // walk. The dialog-body buttons below cover all three steps,
+    // which is enough to prove the wizard mounted; footer wiring is
+    // exercised by direct ConnectionWizardDialog#currentStep() poking
+    // in unit tests further down.
+    java.util.Set<String> buttonIds = allDescendants(dialog)
+        .filter(Button.class::isInstance)
+        .map(Button.class::cast)
+        .map(b -> b.getId().orElse(""))
+        .collect(java.util.stream.Collectors.toSet());
+
+    // Step 1 — provider preset
+    assertTrue(buttonIds.contains("calendar-wizard-preset-icloud"),
+        "Step 1 must expose the iCloud preset button; saw: " + buttonIds);
+    // Step 2 — test-connection button
+    assertTrue(buttonIds.contains("calendar-wizard-test"),
+        "Step 2 must expose Test-connection; saw: " + buttonIds);
+    // Step 3 — bulk buttons
+    assertTrue(buttonIds.contains("calendar-wizard-bulk-on"),
+        "Step 3 must expose the Select-all bulk button; saw: " + buttonIds);
+    assertTrue(buttonIds.contains("calendar-wizard-bulk-off"),
+        "Step 3 must expose the Select-none bulk button; saw: " + buttonIds);
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #7 Schicht 2: hybrid default-visibility threshold is 5")
+  void wizardHybridThresholdConstant() {
+    // The hybrid default-visibility rule (≤5 auto-on, >5 auto-off)
+    // is pinned at 5; this guards against accidental tweaks to the
+    // public constant, since the spec is explicit (Planning #7
+    // Konzept-Verfeinerung).
+    assertEquals(5, com.svenruppert.chronogrid.ui.ConnectionWizardDialog
+        .HYBRID_DEFAULT_VISIBILITY_THRESHOLD);
+  }
+
+  @Test
   @DisplayName("Settings dialog exposes the iCloud quick-connect preset button")
   void settingsDialogCarriesIcloudPreset() throws Exception {
     AppUser user = new AppUser(80L, "Preset User",

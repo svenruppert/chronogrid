@@ -1575,9 +1575,50 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   Dialog openConnectionsDialog() {
     ConnectionsDialog dialog = new ConnectionsDialog(messages,
-        stateStore.readServers(), stateStore.readSubscriptions());
+        stateStore.readServers(), stateStore.readSubscriptions(),
+        this::openConnectionWizard);
     dialog.open();
     return dialog.getContent();
+  }
+
+  /**
+   * Planning-Feature #7 Schicht 2 — opens the {@link ConnectionWizardDialog}.
+   * Wires the three injected callbacks: {@code discoveryFn} runs the
+   * exact same {@code CalDavDiscovery#discover} the legacy Settings
+   * dialog uses (so behaviour is identical), {@code probeFn} does a
+   * narrow {@code findInRange} via a throwaway {@link CalendarService},
+   * and {@code onComplete} delegates to the existing
+   * {@link #applyConfig} so the upsertServer + mergeSubscriptions
+   * + activate path is shared with the legacy save-from-Settings.
+   */
+  Dialog openConnectionWizard() {
+    ConnectionWizardDialog wizard = new ConnectionWizardDialog(
+        messages,
+        (uri, creds) -> new CalDavDiscovery().discover(uri, creds[0], creds[1]),
+        creds -> {
+          URI parsed = parseUri(creds[0]);
+          if (parsed == null) return false;
+          CalDavConnectionConfig probeConfig =
+              new CalDavConnectionConfig(parsed, creds[1], creds[2]).normalised();
+          try {
+            CalendarService.fromConfig(probeConfig, displayZone)
+                .findInRange(LocalDateTime.now().minusHours(1),
+                    LocalDateTime.now().plusHours(1)).count();
+            return true;
+          } catch (RuntimeException ex) {
+            logger().info("Wizard probe against {} failed: {}",
+                parsed, ex.toString());
+            return false;
+          }
+        },
+        result -> applyConfig(result.uri().toString(),
+            result.username(), result.password(),
+            result.selectedCalendars()),
+        (isError, msg) -> {
+          if (isError) notifyError(msg); else notifyInfo(msg);
+        });
+    wizard.open();
+    return wizard.getContent();
   }
 
   private void openSubscriptionsDialog() {

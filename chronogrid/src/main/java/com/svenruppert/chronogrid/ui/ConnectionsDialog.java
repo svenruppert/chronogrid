@@ -64,16 +64,27 @@ public final class ConnectionsDialog
   private static final String K_STATUS_UNKNOWN = "calendar.status.unknown";
   private static final String K_ACTION_CLOSE = "calendar.action.cancel";
 
+  private static final String K_ACTION_ADD = "calendar.connections.action.add";
+
   /** @deprecated kept for tests — prefer the {@link CalendarMessages}-taking variant. */
   @Deprecated
   public ConnectionsDialog(List<CalDavServerConnection> servers,
                            List<CalendarSubscription> subscriptions) {
-    this(CalendarMessages.fallbackOnly(), servers, subscriptions);
+    this(CalendarMessages.fallbackOnly(), servers, subscriptions, null);
+  }
+
+  /** @deprecated kept for tests / call-sites that don't yet wire the wizard. */
+  @Deprecated
+  public ConnectionsDialog(CalendarMessages messages,
+                           List<CalDavServerConnection> servers,
+                           List<CalendarSubscription> subscriptions) {
+    this(messages, servers, subscriptions, null);
   }
 
   public ConnectionsDialog(CalendarMessages messages,
                            List<CalDavServerConnection> servers,
-                           List<CalendarSubscription> subscriptions) {
+                           List<CalendarSubscription> subscriptions,
+                           Runnable onAddServer) {
     this.messages = messages;
     Dialog dialog = getContent();
     dialog.setHeaderTitle(messages.tr(K_TITLE, "Server connections"));
@@ -94,7 +105,24 @@ public final class ConnectionsDialog
     Button close = new Button(messages.tr(K_ACTION_CLOSE, "Cancel"),
         e -> dialog.close());
     close.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-    dialog.getFooter().add(close);
+
+    if (onAddServer != null) {
+      // Planning-Feature #7 Schicht 2: opens the ConnectionWizardDialog.
+      // Stays optional via the null-check so the legacy 3-arg ctor
+      // (used by tests) still works without a wizard.
+      Button add = new Button(
+          messages.tr(K_ACTION_ADD, "+ Add server"),
+          com.vaadin.flow.component.icon.VaadinIcon.PLUS.create(),
+          e -> {
+            dialog.close();
+            onAddServer.run();
+          });
+      add.setId("calendar-connections-add");
+      add.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+      dialog.getFooter().add(close, add);
+    } else {
+      dialog.getFooter().add(close);
+    }
   }
 
   private VerticalLayout buildGrid(List<CalDavServerConnection> servers,
