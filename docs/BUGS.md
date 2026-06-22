@@ -43,6 +43,9 @@ Tabelle parallel aktualisieren**.
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | ✅ behoben | `968038d` |
 | #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben | `40a9b7b` + `f28d694` + `c12bb38` |
+| #13 | Infomaniak-Web-UI zeigt Per-Event-Farbe nicht (Provider-UI-Limitation) | ⚫ verworfen — Daten korrekt, Provider-Feature-Lücke | — |
+| #14 | Zeitzone wird bei neu erstellten Terminen nicht mitgegeben (TZID-Selector fehlt) | 🟡 erfasst — vermutet, brauche iCal-Body-Check | — |
+| #15 | Termin-Schrift in Übersicht weiß → unlesbar bei hellen Custom-Farben | 🔬 analysiert — Kontrast-Auto-Pick als v1-Fix | — |
 
 ---
 
@@ -1958,6 +1961,294 @@ fromConnections, 1–2 Stunden.
   Pfad symmetrisch zu Nextcloud — Konsistenz-Gewinn.
 
 
-## BUG - Zeitzonen werden wohl nicht mitgegeben wenn ein Termin in der UI Erstellt wird. Das muss natürlich auswählbar sein.
+---
 
-## BUG - Die Schrift in der Kalenderübersicht ist weiß. Das ist bei hellen Farbtönen der Kalendereinträge wie hell gelb, nicht lesbar. Die Schriftart muss umschaltbar sein und zu dem jeweiligen Theme passen
+## #13 — Infomaniak Web-UI zeigt Per-Event-Farbe nicht an (Provider-UI-Limitation)
+
+> **Original:** Bei dem CalDAV-Server von Infomaniak geht es mit
+> der Farbe auch nicht.
+>
+> **Sven's iCal-Export aus Infomaniak nach App-Save:**
+> ```
+> COLOR:brown
+> ```
+
+**Status:** ⚫ verworfen — Provider-UI-Limitation, kein Bug auf unserer Seite. Daten korrekt persistiert; Infomaniak's Web-UI rendert per-event Farben nicht.
+**Filed:** 2026-06-22
+
+### Analyse
+
+Sven hat aus unserer App einen Termin mit Farbe nach Infomaniak
+geschrieben. Der iCal-Export zeigt `COLOR:brown` — exakt was
+unsere App schreiben soll für ein non-Apple-Target (snap-to-
+nearest CSS3 named token). Der CalDAV-Layer round-trippt die
+Daten korrekt — jeder andere CalDAV-Client kann die Farbe lesen.
+
+**Aber:** Infomaniak's eigene Web-UI rendert per-event Farben
+**gar nicht**. Anders als Nextcloud (das mit named tokens
+funktioniert, BUG #12 fix), zeigt Infomaniak's Calendar-UI
+keinerlei Farb-Indicator für Termine — unabhängig vom Wert.
+
+Das ist eine **Provider-eigene UI-Feature-Lücke**, nicht ein Bug
+in unserer App. Vergleichbar mit:
+- iCloud's UI: kennt überhaupt keine Per-Event-Farbe (BUG #2-
+  Kontext, dort der DESCRIPTION-Marker als Workaround damit
+  unsere App die Farbe behält)
+- Nextcloud's UI: kennt nur named CSS3 tokens (BUG #12 fix
+  schreibt entsprechend named)
+- Infomaniak's UI: zeigt per-event Farbe gar nicht an
+
+Mögliche Fix-Pfade falls Sven Infomaniak-UI-Sichtbarkeit braucht:
+
+(A) Reverse-engineer Infomaniak's interne Farbe-Repräsentation —
+    möglicherweise via einer X-Property oder PROPPATCH auf die
+    Collection. Bräuchte Trial-and-Error mit Infomaniak's
+    eigenen UI-erzeugten Events als Referenz.
+(B) Akzeptieren als Provider-Limitation — User benutzt unsere
+    App als primäre UI für Per-Event-Farben.
+
+**Empfehlung:** (B). Die App ist die User-facing UI für
+ChronoGrid; Infomaniak's UI ist ein Sekundär-Konsument der das
+Feature halt nicht hat.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1** — *Per-event colour*: gilt für die
+  App-eigene Darstellung. Cross-Provider-UI-Konsistenz war nie
+  ein Acceptance-Signal (es war immer „diese App zeigt's
+  korrekt").
+
+### Reproduktion
+
+1. In unserer App einen Termin auf einem Infomaniak-Kalender
+   mit Custom-Farbe speichern.
+2. Termin in Infomaniak-Web-UI öffnen.
+3. **Tatsächlich:** kein Farb-Indicator sichtbar.
+4. iCal-Export desselben Termins aus Infomaniak → enthält
+   `COLOR:<...>`-Property korrekt.
+
+### Größe
+
+Wenn als Limitation akzeptiert: 0. Wenn (A) untersuchen sollen:
+M-L, Trial-and-Error-Aufwand, ungewisser Ausgang.
+
+### Risiko / offene Fragen
+
+- **Infomaniak könnte eine X-Property unterstützen** die wir
+  nicht kennen. Eine Bestandsaufnahme über die Infomaniak-UI:
+  einen Termin in Infomaniak's UI erstellen, dann iCal
+  exportieren — falls Infomaniak eine X-Property nutzt, sehen
+  wir's. Wenn nicht, ist's UI-Feature-Lücke.
+
+---
+
+## #14 — Zeitzone wird bei neu erstellten Terminen nicht mitgegeben (TZID muss auswählbar sein)
+
+> **Original:** Zeitzonen werden wohl nicht mitgegeben wenn ein
+> Termin in der UI Erstellt wird. Das muss natürlich auswählbar
+> sein.
+
+**Status:** 🟡 erfasst — vermutet, brauche Verifikation via iCal-Body-Check
+**Filed:** 2026-06-22
+
+### Analyse
+
+Aktueller Code-Pfad im `EntryMapper.toICalendarText`:
+
+```java
+String tzid = entry.getCustomProperty(CUSTOM_TZID);
+ZoneId zone = resolveZone(tzid);
+...
+if (tzid != null && !allDay) {
+    TimezoneAssignment assignment = new TimezoneAssignment(...);
+    ...
+}
+```
+
+Wenn `CUSTOM_TZID` nicht gesetzt ist, wird kein VTIMEZONE-Block
+emittiert. Bei neu erstellten Terminen (sowohl
+`openNewEventEditor` als auch der drag-select-Pfad) wird
+`CUSTOM_TZID` **nicht** gesetzt — der Code geht implizit von
+System-Default-Timezone aus und schreibt `DTSTART:...Z` (UTC).
+
+**Beleg aus #11's verifiziertem iCal:**
+
+```
+DTSTART:20260622T100000Z
+DTEND:20260622T103000Z
+```
+
+`Z`-Suffix = UTC. Keine `TZID=`-Param. Für 10:00 lokal in
+Europe/Berlin wäre das eigentlich `08:00 UTC` (Sommerzeit) —
+also wäre 10:00Z falsch interpretiert als 12:00 lokal.
+
+Hmm, aber Sven sieht den Termin in Infomaniak vermutlich
+korrekt um 10:00 angezeigt (sonst hätte er das auch beklagt).
+Das deutet auf: der LocalDateTime aus der DateTimePicker wird
+als UTC-LocalDateTime interpretiert und mit `Z` geschrieben.
+Beim Read interpretiert FullCalendar das als UTC und konvertiert
+in die UI-Locale.
+
+**Vermutung:** technisch geht der Termin durch, ABER die
+Zeitzone-Semantik ist verloren. Bei Cross-Timezone-Sharing
+(Sven Berlin, Termin-Partner New York) würde der Termin in
+NY's UI um 10:00 NY-Zeit erscheinen statt 4:00 NY-Zeit
+(was 10:00 Berlin entspricht). Das ist der eigentliche Bug.
+
+**Fix-Plan:**
+
+1. **EventEditorDialog**: Timezone-Selector ergänzen. Vaadin's
+   `Select<ZoneId>` mit allen `ZoneId.getAvailableZoneIds()`,
+   Default = Browser-Locale oder System-Default. Persistiert
+   auf `CUSTOM_TZID`.
+2. **EntryMapper.toICalendarText**: bei timed Events (nicht
+   AllDay) IMMER eine TZID emittieren. Wenn `CUSTOM_TZID` null,
+   default auf `displayZone` (= ZoneId.systemDefault()).
+3. **EventEditorDialog Open**: Timezone-Selector mit
+   `CUSTOM_TZID` (oder Default) initialisieren.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1, #2, #3, #4, #5, #6** — alle Termin-
+  bezogenen Features. Zeitzone ist eine Daten-Grundlage.
+- **Bezug zu BUG #11**: gleicher Code-Pfad
+  (`EntryMapper.toICalendarText` DTSTART-Behandlung).
+
+### Reproduktion
+
+1. Neuen Termin in unserer App mit Start = 10:00 Europe/Berlin
+   erstellen, Save auf Infomaniak.
+2. iCal-Export aus Infomaniak:
+   - **Tatsächlich (laut #11-iCal):** `DTSTART:20260622T100000Z`
+     (UTC suffix, keine TZID)
+   - **Erwartet:** `DTSTART;TZID=Europe/Berlin:20260622T100000`
+     + ein `BEGIN:VTIMEZONE`-Block am Anfang des VCALENDAR
+
+### Touchpoints
+
+- `chronogrid: ui/EventEditorDialog.java` — neuer Timezone-
+  Selector + Persistenz auf `CUSTOM_TZID`
+- `chronogrid-core: mapping/EntryMapper.java#toICalendarText` —
+  TZID immer emittieren für timed events
+- `chronogrid-core: mapping/EntryMapper.java#resolveZone` —
+  bereits da, kann genutzt werden
+- `chronogrid-core: mapping/EntryMapper.java#CUSTOM_TZID` —
+  bereits da, wird beim Read gesetzt, beim Write nicht
+
+### Größe
+
+M. Timezone-Selector + Persist-Pfad + Mapper-Anpassung +
+Tests. Geschätzt 1-2 Stunden inkl. Smoke-Test.
+
+### Risiko / offene Fragen
+
+- **Default-Timezone** für bestehende Termine die ohne TZID
+  geschrieben wurden: weiter UTC interpretieren? Oder zu
+  System-Default migrieren? Vorschlag: bei null bleibt UTC,
+  Selector default auf Browser-Locale.
+- **Recurring Events** über Timezone-Wechsel (DST): VTIMEZONE-
+  Block muss korrekt erzeugt werden. Biweekly macht das, aber
+  Test nötig.
+
+---
+
+## #15 — Termin-Beschriftung in Kalenderübersicht ist weiß, bei hellen Farben unlesbar
+
+> **Original:** Die Schrift in der Kalenderübersicht ist weiß.
+> Das ist bei hellen Farbtönen der Kalendereinträge wie hell
+> gelb, nicht lesbar. Die Schriftart muss umschaltbar sein und
+> zu dem jeweiligen Theme passen.
+
+**Status:** 🔬 analysiert
+**Filed:** 2026-06-22
+
+### Analyse
+
+FullCalendar v6 setzt die Text-Farbe der Events default auf
+`var(--fc-event-text-color)` = weiß. Das ist OK für dunkle Event-
+Background-Farben (= die meisten Stock-Themes), wird aber
+unlesbar wenn der User eine helle Custom-Farbe wie `#ffff88`
+(hell-gelb) oder `lightyellow` wählt.
+
+**Lösungsidee — automatische Kontrast-Berechnung:**
+
+FullCalendar's `entry.setTextColor(...)` API kann pro Event
+gesetzt werden. Wir berechnen aus dem Background:
+
+```java
+// In CalendarService.applyColours, after setBackgroundColor:
+String textColor = pickReadableTextColor(backgroundColor);
+entry.setTextColor(textColor);
+```
+
+Helper: WCAG-konforme Luminanz-Berechnung. Pseudo:
+```java
+double luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+return luminance > 0.5 ? "#000000" : "#ffffff";
+```
+
+Trivial implementierbar. Automatisch, keine User-Interaktion
+nötig. Funktioniert für jede Background-Farbe.
+
+Sven's Erweiterung „Schriftart umschaltbar zu Theme passen" geht
+weiter — möglicherweise:
+- Light-Theme: dunkle Schrift auf hellem Background
+- Dark-Theme: helle Schrift auf dunklem Background
+- Theme-Switch via System / User-Preference
+
+Das wäre eine separate Theme-Layer-Erweiterung. v1: einfache
+Luminanz-Kontrast-Logik pro Event. v2: Theme-Awareness als
+separates Feature.
+
+### Betroffene Features
+
+- **FEATURE_BACKLOG.md #1** — *Per-event colour with calendar-
+  coloured edge stripe*: Per-Event-Farbe ist gerade der
+  Auslöser dieses Bugs. Acceptance-Signal „User-Pick ist
+  sichtbar im Grid" gilt nur wenn die Schrift auch lesbar ist.
+- **FEATURE_BACKLOG.md #4** — *Stronger event borders*: kein
+  direkter Bezug, aber gemeinsame visuelle Story.
+
+### Reproduktion
+
+1. Termin mit heller Farbe (z.B. `lightyellow` = `#ffffe0`)
+   anlegen.
+2. Im Grid ansehen.
+3. **Tatsächlich:** Schrift ist weiß → unlesbar gegen
+   hell-gelben Background.
+4. **Erwartet:** Schrift automatisch dunkel (= schwarz oder
+   Lumo-default-Text-Farbe) für lesbaren Kontrast.
+
+### Touchpoints
+
+- `chronogrid-core: service/CalendarService.java#applyColours`
+  — nach `setBackgroundColor` zusätzlich `setTextColor` mit
+  WCAG-Kontrast-Lookup
+- Neue Helper-Klasse `ContrastTextColor` oder Erweiterung von
+  `CssColorNames`
+- `chronogrid: src/main/resources/META-INF/resources/frontend/styles/chronogrid.css`
+  — evtl. `--fc-event-text-color` Override entfernen wenn
+  inline-style das übersteuert
+
+### Größe
+
+S. ~20 Zeilen für die Luminanz-Funktion + ein
+`setTextColor`-Aufruf in `applyColours`. Plus Tests. 30 min.
+
+Theme-Awareness (Sven's v2-Erweiterung): separates Feature,
+würde in `Feature-Planning.md` gehören.
+
+### Risiko / offene Fragen
+
+- **WCAG-Schwellenwert**: 0.5 ist eine grobe Heuristik. WCAG
+  AA verlangt Kontrast ≥4.5:1 für normalen Text. Für Border-
+  Cases (Background-Luminanz ≈ 0.5) könnte das Wechsel-
+  Verhalten flickern. Genauere Heuristik: relative Luminanz +
+  Kontrast-Ratio gegen Schwarz und Weiß berechnen, dann den
+  besseren wählen.
+- **Lumo-Theme-Variablen**: statt hartem `#000000` /
+  `#ffffff` ggf. `--lumo-body-text-color` /
+  `--lumo-primary-contrast-color` nutzen für Theme-
+  Konsistenz. Aber Inline-Style auf Event-Element kann CSS-
+  Variablen referenzieren? In FullCalendar's Render-Pfad
+  vermutlich nicht direkt.
