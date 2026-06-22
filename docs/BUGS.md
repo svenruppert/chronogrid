@@ -35,14 +35,14 @@ Tabelle parallel aktualisieren**.
 | #2 | Per-Event-Farbe geht beim iCloud-Edit verloren | ✅ behoben | `7ac73ca` |
 | #3 | Datumsselektor friert bei Klick auf Tag mit Farbbalken ein | ✅ behoben | `e4302f4` |
 | #4 | Multi-Kalender + Reload: alle Termine verschwinden | ✅ behoben | `d0abe01` |
-| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | `d25e377` |
+| #5 | Per-Event-Farbe nicht sichtbar bei timed Events | ✅ behoben (iCloud-verifiziert; Nextcloud-Roundtrip → #12) | `d25e377` |
 | #6 | Verbindungsmanagement-UX ungenügend | 🟡 erfasst — UX, evtl. besser als Feature-Planning-Eintrag | — |
 | #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | ✅ behoben | `d25e377` |
 | #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
-| #12 | Farbe in Nextcloud gesetzt → wird beim Reload nicht übernommen | 🟡 erfasst — brauche Nextcloud-iCal-Body zur Hypothesen-Auswahl | — |
+| #12 | Per-Event-Farbe auf Nextcloud: beidseitiger Roundtrip-Verlust | 🟡 erfasst — brauche Nextcloud-iCal-Body zur Hypothesen-Auswahl | — |
 
 ---
 
@@ -706,8 +706,15 @@ SpotBugs.
 > keine Farbkennung der eigenen Farbe wenn der Termin kein
 > Tagestermin ist.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** ✅ behoben 2026-06-22 in `d25e377` (CSS-Fix: TimeGrid-Border-Reduktion + `.fc-event-main` Transparency). Sven-verifiziert auf iCloud-Terminen: Fill der eigenen Farbe in Week/Day-View jetzt sichtbar.
 **Filed:** 2026-06-21
+
+> **Cross-Provider-Hinweis:** Beim Smoke-Test fiel auf dass
+> Nextcloud-Termine die Farbe gar nicht erst durchreichen — der
+> Termin „verliert die Farbe" bzw. „kommt wohl nicht in
+> Nextcloud an". Das ist KEIN CSS-Sichtbarkeitsproblem (was #5
+> war) sondern ein Persist-/Roundtrip-Problem auf der Nextcloud-
+> Seite. Tracking erweitert in **BUG #12**.
 
 ### Fix-Notiz
 
@@ -1602,22 +1609,48 @@ Browser-Smoke-Test. Geschätzt 30 Minuten.
 
 ---
 
-## #12 — Farbe in Nextcloud gesetzt → wird beim Reload nicht in die App übernommen
+## #12 — Per-Event-Farbe auf Nextcloud: Roundtrip verliert die Farbe in beide Richtungen
 
-> **Original:** In NextCloud kann ich die Farbe setzen, die wird
-> dann aber nicht in die UI übernommen bei einem Reload/Refresh.
+> **Original (erste Beobachtung):** In NextCloud kann ich die
+> Farbe setzen, die wird dann aber nicht in die UI übernommen bei
+> einem Reload/Refresh.
+>
+> **Erweiterung (BUG #5 Smoke-Test, 2026-06-22):** Selbst der
+> einfache Roundtrip in der Gegenrichtung schlägt fehl — wenn
+> die Farbe in unserer App auf einem Nextcloud-Termin gesetzt
+> wird, „verliert der Termin wieder seine Farbe, bzw. kommt
+> wohl nicht in Nextcloud an".
 
-**Status:** 🟡 erfasst — Hypothesen vorhanden, brauche Server-Log oder Nextcloud-iCal-Inspect
-**Filed:** 2026-06-21
+**Status:** 🟡 erfasst — beidseitig fehlerhafter Roundtrip; brauche Nextcloud-iCal-Body zur Diagnose
+**Filed:** 2026-06-21 (Erweiterung 2026-06-22)
 
 ### Analyse
 
-Komplementärer Bug zu #7 (Apple-only Marker). Bei #7 war die
-Sorge: Marker in Nextcloud nicht sichtbar machen. Hier umgekehrt:
-**Farbe in Nextcloud gesetzt wird von unserer App nicht
-erkannt**.
+Bug ist **beidseitig**: weder App→Nextcloud noch
+Nextcloud→App preserviert die Farbe. Komplementäre Diagnose-
+Frage zu BUG #7 (wo der Schreibpfad Apple-spezifisch parametriert
+wurde mit der Annahme „Nextcloud round-trippt COLOR korrekt" —
+Sven's Test widerlegt diese Annahme empirisch).
 
-Drei mögliche Bruchstellen:
+Vier mögliche Bruchstellen (zwei für jede Richtung):
+
+**Richtung App→Nextcloud→App** (neuer Befund, BUG #5 Smoke-Test):
+
+**Hypothese D — Nextcloud strippt RFC-7986 `COLOR` beim PUT.**
+Möglicherweise filtert Nextcloud's Validator beim PUT alle
+Properties, die er nicht in seinem internen Datenmodell
+abbildet — analog zu Apple's bekanntem Verhalten beim
+User-Edit, aber bereits beim Server-side-Receive. Da wir
+durch BUG #7 für Nextcloud explizit den
+DESCRIPTION-Marker WEGGELASSEN haben, gibt es keinen
+Fallback — die Farbe wird zwangsläufig verworfen.
+
+**Hypothese E — Server akzeptiert COLOR aber zeigt's nicht in
+seiner UI an UND filtert ihn beim Read-Back.** Weniger
+wahrscheinlich, weil ein CalDAV-Server beim REPORT eigentlich
+den iCal-Body 1:1 weiterleitet, nicht filtert. Aber prüfbar.
+
+**Richtung Nextcloud→App** (ursprünglicher Befund):
 
 **Hypothese A — Nextcloud setzt die Farbe nicht als RFC-7986
 `COLOR` auf dem Event, sondern als Property auf der
@@ -1638,15 +1671,35 @@ falschen Format** (z.B. CSS named color `red` statt
 `#ff0000`). Unser Reader filtert nur `isBlank()`, sollte aber
 auch named colors akzeptieren — Test nötig.
 
-**Verifikation:** Brauche von Sven entweder
-- Server-Log nach Reload eines Nextcloud-Termins, bei dem in
-  Nextcloud die Farbe gesetzt wurde, oder
-- Direkter iCal-Download des Events aus Nextcloud
-  (Right-click → Save iCal export oder
-  `curl https://nx93157.../event.ics`)
+**Verifikation:** Brauche von Sven idealerweise zwei iCal-
+Bodies aus Nextcloud:
 
-Mit dem iCal-Body kann ich sofort feststellen welches Format
-Nextcloud schreibt.
+1. **Nach App-Save mit Farbe**: Ein Termin den unsere App
+   mit Farbe auf Nextcloud geschrieben hat. iCal-Body via
+   Nextcloud-Web-UI → Termin → „iCalendar export" oder
+   `curl -u user:pass https://nx93157.../event.ics`.
+   - Wenn `COLOR:#xxxxxx` im Body steht → Hypothese D
+     ausgeschlossen, der Server hat's gespeichert. Read-back
+     liefert dann aber nichts → fokussiere auf C oder
+     Reader-Pfad.
+   - Wenn `COLOR` fehlt → Hypothese D bestätigt, Nextcloud
+     strippt.
+2. **Nach Nextcloud-UI-Setze mit Farbe**: Termin in
+   Nextcloud's UI Farbe wählen, save, dann iCal-Body
+   abrufen.
+   - Wenn `COLOR:` da → Hypothese A/B ausgeschlossen,
+     Reader-Bug.
+   - Wenn nur `X-NEXTCLOUD-COLOR:` o.ä. → Hypothese B.
+   - Wenn weder noch im iCal-Body → Hypothese A bestätigt,
+     Farbe lebt nur auf der Collection-PROPPATCH-Ebene.
+
+**Quick-Fix-Pfad falls D bestätigt:** den DESCRIPTION-Marker
+auch für Nextcloud schreiben (effektiv #7 rückgängig für
+Nextcloud), weil die Marker-Noise das geringere Übel als
+„Farbe verloren" ist. Das wäre eine Anpassung am
+`isAppleProviderUri`-Aufruf in `CalendarService.save` —
+entweder „Marker IMMER schreiben" als sicherer Default oder
+einen Provider-Profile-Switch der je Server entscheidet.
 
 **Reader-Side-Erweiterung (vermutlich nötig):** zusätzlich zu
 COLOR + DESCRIPTION-Marker auch X-NEXTCLOUD-COLOR /
