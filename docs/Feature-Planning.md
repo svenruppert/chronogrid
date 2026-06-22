@@ -156,8 +156,73 @@ Switch zu Month, sieht der Nutzer den hervorgehobenen Today-Cell aus
 > einziges Feature weiter (BUGS-Einträge sind als ⚫ verworfen mit
 > Verweis hierher markiert).
 
-**Status:** 🟡 geplant — Design-Schritt fehlt noch (siehe „Risiko"
-unten)
+**Status:** 🔧 in Arbeit — Schicht 1: Quick-Toggle Dropdown
+
+### Konzept-Verfeinerung (2026-06-22)
+
+Design-Schritt mit Sven durchgegangen. Die folgenden vier
+Entscheidungen sind jetzt geklemmt und treiben die Implementierung:
+
+| Frage | Entscheidung |
+|---|---|
+| **UI-Shape** | Wizard für neue Verbindung **plus** separater Manager-Dialog fürs Verwalten. Zwei Touchpoints, klare Trennung „Erstmalig" vs. „Pflegen". |
+| **Quick-Toggle in Toolbar** | Ein Dropdown-Button („Sichtbar (3/7)") in der Toolbar; Klick öffnet kompaktes Popover mit Subscriptions-Toggle-Liste. Spart Toolbar-Real-Estate, +1 Klick pro Toggle bewusst akzeptiert. |
+| **Default-Visibility neuer Kalender** | Hybrid: ≤ 5 Kalender automatisch aktivieren, > 5 zeigt einen expliziten Auswahl-Step im Wizard (Checkbox-Liste mit „Alle aus" als Default + „Alle ein"-Bulk-Button). |
+| **Referenz-UX** | Apple Calendar (macOS) — Sidebar mit Account-Sektion + Kalender-Liste pro Account. Vertraut für die iCloud-zentrische Companion-Blog-Zielgruppe. |
+
+**Daraus abgeleiteter Layout-Plan für den Manager-Dialog:**
+
+```
+┌─ Connection Manager ────────────────────────┐
+│ [+ Add server (öffnet Wizard)]              │
+│ ┌──────────────┬───────────────────────────┐│
+│ │ Servers      │ Personal (iCloud)         ││
+│ │              │ ───────────────────────── ││
+│ │ ● iCloud  ✓  │ ● Personal           ✓   ││
+│ │   Apple      │ ● Family             ✓   ││
+│ │ ○ Nextcloud  │ ○ Work               ✗   ││
+│ │ ● Infomaniak │ ● Holidays           ✓   ││
+│ │              │                           ││
+│ │              │ [Re-discover] [Remove]    ││
+│ └──────────────┴───────────────────────────┘│
+│                            [Close]          │
+└─────────────────────────────────────────────┘
+```
+
+Master-Detail wie in Apple Calendar's Preferences-Accounts-Tab.
+Server-Liste links, ausgewählter Server zeigt rechts seine
+Subscription-Liste mit per-Kalender-Visibility-Toggle + Color-Dot.
+
+**Wizard-Flow (3 Schritte):**
+
+1. **URL eingeben** + Provider-Detect (iCloud/Google/Nextcloud/
+   Custom). Bei iCloud explizite Hint-Box: „Braucht App-spezifisches
+   Passwort von appleid.apple.com".
+2. **Credentials** (User + Password). Test-Connection-Button vor
+   „Weiter".
+3. **Discovery-Ergebnis** als Kalender-Auswahl:
+   - ≤ 5 Kalender: alle aktiviert anzeigen, nur Bestätigen.
+   - > 5 Kalender: Checkbox-Liste, alle aus, mit „Alle ein"-Bulk.
+
+**Implementierungs-Reihenfolge (Schichten):**
+
+1. **Schicht 1 — Quick-Toggle Dropdown.** Kleinster isolierter
+   Schritt; neuer Toolbar-Button, neues Popover-Element. Bestehende
+   Dialoge bleiben unverändert. Lieferbar in ~2-3 Stunden.
+2. **Schicht 2 — Connection-Wizard.** Ersetzt den Plus-Button im
+   alten `ConnectionsDialog`. Bestehende Dialoge bleiben für jetzt
+   bestehen. Inkl. iCloud-Hint + Test-Connection-Button + Discovery-
+   Auswahl-Step.
+3. **Schicht 3 — Manager-Dialog.** Vereint Settings + Connections +
+   Subscriptions in ein Apple-Style-Master-Detail. Toolbar-Buttons
+   schrumpfen auf einen einzigen „Connection Manager". Schicht 3
+   löscht die drei alten Dialoge.
+4. **Schicht 4 — Status-aware Notifications.** Alle
+   `notifyInfo/Error`-Aufrufe bekommen Subject-Slot; neue
+   Multi-Server-Summary-Variante.
+5. **Schicht 5 — Legacy-`readConnection()`-Auto-Migration.**
+   Read-Once-Write-In-Subs, Legacy-Key bleibt erst lesbar (Risk-
+   Mitigation), Major-Release zieht ihn endgültig.
 
 ### Konzept
 
@@ -230,21 +295,14 @@ Konkretisierung.
 
 ### Risiko / offene Fragen
 
-- **Konkrete User-Story fehlt.** Sven hat „intuitiv" + „einfach
-  machbar" gesagt — beides nicht spezifizierbar. Vor dem ersten
-  Commit braucht es eine Designgespräch-Sitzung: welche
-  Klick-Pfade fühlen sich falsch an? Welche fühlen sich
-  *richtig* an als Referenz? Wahrscheinlich am besten anhand
-  konkreter Screenshots Apple Calendar / Google Calendar / Thunderbird
-  als Referenz-UX abklären.
-- **Default-Visibility neuer Kalender:** aktivieren-by-default
-  (User sieht sofort alles, Spam-Risiko bei Servern mit 20+
-  Kalendern) oder deaktivieren-by-default (kein Spam, aber User
-  muss aktiv aktivieren). Vorschlag: aktivieren bei <= 5
-  Kalendern, sonst Auswahl-UI im Wizard.
-- **Discovery-Trigger für Re-Discovery:** manuell per Button oder
-  automatisch (Pull alle X Minuten)? Vorschlag: manuell für v1,
-  Auto-Pull als separates Folgeticket falls gewünscht.
+- ✅ **Konkrete User-Story** (geklärt 2026-06-22): UI-Shape =
+  Wizard + Manager-Dialog, Quick-Toggle = Toolbar-Dropdown,
+  Referenz-UX = Apple Calendar. Siehe „Konzept-Verfeinerung" oben.
+- ✅ **Default-Visibility neuer Kalender** (geklärt 2026-06-22):
+  Hybrid ≤ 5 auto-aktivieren, > 5 mit expliziter Auswahl-Step.
+- **Discovery-Trigger für Re-Discovery:** manuell per Button im
+  Manager-Dialog (Schicht 3). Auto-Pull als separates Folgeticket
+  falls gewünscht.
 - **Migration des Legacy-`readConnection()`-State:** existierende
   User mit gesetztem `connection.config`-Attribut müssen einmalig
   in den Multi-Server-State portiert werden. Risiko: Daten-
