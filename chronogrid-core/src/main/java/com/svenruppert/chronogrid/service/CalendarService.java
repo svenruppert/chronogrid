@@ -324,10 +324,15 @@ public final class CalendarService implements HasLogger {
     // fall back to hex when not. Apple targets keep hex because
     // iCloud's own UI doesn't show per-event colours anyway and
     // hex preserves precision for the DESCRIPTION-marker fallback.
-    boolean apple = isAppleProviderUri(target);
+    // Per-provider serialisation quirks (BUG #2, #7, #12) now live
+    // in the chronogrid-core/provider package. ProviderRegistry
+    // walks the URI through the known sniffers and falls back to
+    // GenericProvider for unrecognised servers.
+    com.svenruppert.chronogrid.provider.CalDavProviderProfile provider =
+        com.svenruppert.chronogrid.provider.ProviderRegistry.forUri(target);
     String body = EntryMapper.isTodo(entry)
         ? mapper.toICalendarTodoText(entry)
-        : mapper.toICalendarText(entry, apple, !apple);
+        : mapper.toICalendarText(entry, provider);
 
     String newEtag = EntryMapper.readEtag(entry)
         .map(etag -> targetClient.putUpdate(target, body, etag))
@@ -344,21 +349,12 @@ public final class CalendarService implements HasLogger {
    * matches (e.g. a brand-new event with no explicit target).
    */
   /**
-   * BUG #7 helper: identifies Apple/iCloud CalDAV endpoints by
-   * hostname suffix. Catches every observed Apple URL pattern —
-   * {@code caldav.icloud.com}, {@code p124-caldav.icloud.com},
-   * {@code p-prod-caldav.icloud.com}, etc. — without false
-   * positives because no other CalDAV provider sits on a
-   * {@code *.icloud.com} hostname.
-   *
-   * <p>Used by {@link #save(Entry, URI)} to gate the DESCRIPTION
-   * sidechannel marker on. Non-Apple providers preserve RFC-7986
-   * {@code COLOR} correctly and don't need the marker; emitting
-   * it for them would show up as visible noise in their UI.
-   *
-   * <p>Public + static so callers (tests, future providers) can
-   * reuse the detection without reinstantiating the service.
+   * @deprecated Apple-detection now lives in
+   *     {@link com.svenruppert.chronogrid.provider.AppleProvider#matches(URI)}.
+   *     Existing tests keep using this delegator until they get
+   *     migrated to {@code ProviderRegistry.forUri(...)}.
    */
+  @Deprecated
   public static boolean isAppleProviderUri(URI uri) {
     if (uri == null) return false;
     String host = uri.getHost();

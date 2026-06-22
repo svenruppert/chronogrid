@@ -373,38 +373,70 @@ public final class EntryMapper {
   }
 
   public String toICalendarText(Entry entry) {
-    // Backward-compatible default: emit the DESCRIPTION sidechannel
-    // marker. Apple-safe by default (no harm if the provider isn't
-    // Apple — the marker is just a discreet text line in the notes).
-    return toICalendarText(entry, true, false);
+    // Backward-compatible default for tests / scripts that don't
+    // know their target. AppleProvider keeps hex AND emits the
+    // marker — both choices are safe defaults: hex never loses
+    // precision, marker is harmless on Apple-tolerant providers.
+    return toICalendarText(entry, new com.svenruppert.chronogrid.provider.AppleProvider());
   }
 
   /**
-   * Two-arg overload kept for callers that haven't migrated to the
-   * three-arg form yet. Defaults {@code preferNamedColors} to
-   * {@code false} (= write hex), which matches the pre-BUG #12
-   * behaviour.
+   * @deprecated Use {@link #toICalendarText(Entry, com.svenruppert.chronogrid.provider.CalDavProviderProfile)}
+   *     instead. The boolean cascade was replaced by the
+   *     {@code provider} package as the project grew past
+   *     three providers (Apple, Nextcloud, Infomaniak).
    */
+  @Deprecated
   public String toICalendarText(Entry entry, boolean appleSidechannel) {
     return toICalendarText(entry, appleSidechannel, false);
   }
 
   /**
-   * BUG #7: gate the DESCRIPTION-suffix sidechannel marker on the
-   * caller's knowledge of the target provider. Apple iCloud strips
-   * COLOR + every custom X- property on user-edit-rewrite, so
-   * Apple writes need the marker for round-trip durability. Other
-   * providers (Nextcloud, Baikal, Radicale) round-trip COLOR
-   * correctly and would show the marker as user-visible noise in
-   * their own UI — pass {@code appleSidechannel = false} for those.
-   *
-   * <p>The reader path is unchanged either way: it always tries
-   * COLOR first and falls back to the marker if present, so a
-   * legacy entry written with the marker still reads correctly
-   * after the producer switches it off.
+   * @deprecated Use {@link #toICalendarText(Entry, com.svenruppert.chronogrid.provider.CalDavProviderProfile)}
+   *     instead.
    */
+  @Deprecated
   public String toICalendarText(Entry entry, boolean appleSidechannel,
                                 boolean preferNamedColors) {
+    // Bridge: synthesise a one-off profile that captures the legacy
+    // booleans so existing tests stay green during the migration.
+    com.svenruppert.chronogrid.provider.CalDavProviderProfile legacy =
+        new com.svenruppert.chronogrid.provider.CalDavProviderProfile() {
+          @Override
+          public String id() {
+            return "legacy-bridge";
+          }
+
+          @Override
+          public boolean matches(java.net.URI uri) {
+            return false;
+          }
+
+          @Override
+          public String formatColor(String hex) {
+            return preferNamedColors ? CssColorNames.toNameOrNearest(hex) : hex;
+          }
+
+          @Override
+          public boolean writeDescriptionMarker() {
+            return appleSidechannel;
+          }
+        };
+    return toICalendarText(entry, legacy);
+  }
+
+  /**
+   * Canonical provider-aware writer. Looks up
+   * {@code provider.formatColor} and {@code provider.writeDescriptionMarker}
+   * to delegate the per-provider serialisation quirks. Replaces
+   * the old boolean-cascade overloads.
+   *
+   * <p>BUG #2 + #7 + #12 background previously embodied in those
+   * booleans now lives in the individual provider classes — see
+   * the {@code chronogrid-core/provider} package.
+   */
+  public String toICalendarText(Entry entry,
+      com.svenruppert.chronogrid.provider.CalDavProviderProfile provider) {
     VEvent vevent = new VEvent();
     String uid = entry.getId() != null ? entry.getId() : UUID.randomUUID().toString();
     vevent.setUid(uid);
@@ -414,14 +446,12 @@ public final class EntryMapper {
     boolean haveColour = entryColor != null && !entryColor.isBlank();
 
     // Description: combine user notes with the BUG #2 colour-suffix
-    // marker ONLY when the target is an Apple/iCloud provider — the
-    // marker is the only carrier that survives Apple's user-edit-
-    // rewrite. Non-Apple providers don't need it (and would show it
-    // as visible noise in their own UI), so we keep the description
-    // clean for them.
+    // marker ONLY when the provider needs it (= Apple). Non-Apple
+    // providers round-trip COLOR correctly and would show the marker
+    // as visible noise in their own UI.
     String userDesc = entry.getDescription();
     String descToWrite = composeDescription(
-        userDesc, (haveColour && appleSidechannel) ? entryColor : null);
+        userDesc, (haveColour && provider.writeDescriptionMarker()) ? entryColor : null);
     if (descToWrite != null) vevent.setDescription(descToWrite);
 
     String location = entry.getCustomProperty(CUSTOM_LOCATION);
@@ -434,21 +464,11 @@ public final class EntryMapper {
       // in iCloud's own UI. The DESCRIPTION marker above is the
       // safety net for the latter case.
       //
-      // BUG #12: when preferNamedColors is set (= non-Apple target,
-      // typically Nextcloud), snap the colour to the nearest CSS3
-      // named token. Nextcloud's UI only renders colour pills when
-      // COLOR carries a named token; arbitrary hex values become
-      // invisible in its UI even though they persist correctly
-      // through CalDAV. We trade hex precision for consistent
-      // visualisation in both UIs — Sven explicitly accepted the
-      // snap-to-nearest trade-off after weighing it against the
-      // "colour invisible in Nextcloud-UI" alternative. Exact
-      // matches stay exact; arbitrary hex like #6bbd88 snaps to
-      // its closest named neighbour (e.g. darkseagreen).
-      String colourToWrite = preferNamedColors
-          ? CssColorNames.toNameOrNearest(entryColor)
-          : entryColor;
-      vevent.setColor(colourToWrite);
+      // BUG #12 in provider language: provider.formatColor decides
+      // hex pass-through (Apple, Generic) vs. snap-to-nearest CSS3
+      // named (Nextcloud, Infomaniak). The provider package
+      // documents the per-server rationale.
+      vevent.setColor(provider.formatColor(entryColor));
     }
 
     writeCategories(vevent, entry.getCustomProperty(CUSTOM_CATEGORIES));
