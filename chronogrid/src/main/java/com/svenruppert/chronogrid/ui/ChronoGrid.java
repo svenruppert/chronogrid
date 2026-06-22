@@ -1142,6 +1142,16 @@ public class ChronoGrid extends Composite<VerticalLayout>
     Entry draft = new Entry(UUID.randomUUID().toString());
     draft.setStart(base);
     draft.setEnd(base.plusHours(1));
+    // BUG #11: without an explicit setAllDay(false) the Stefan-
+    // FullCalendar Entry leaves isAllDay() ambiguous (null/true),
+    // which EntryMapper.toICalendarText then interprets as allDay
+    // and emits DTSTART;VALUE=DATE — so Nextcloud (and any other
+    // CalDAV consumer that respects RFC 5545) renders the new
+    // event as a day-long block instead of the requested timed
+    // slot. Drag-select path already does this correctly via
+    // event.isAllDay() from the calendar listener; the toolbar
+    // "New event" path needs the same explicit init.
+    draft.setAllDay(false);
     openEditor(draft, true);
   }
 

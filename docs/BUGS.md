@@ -41,7 +41,7 @@ Tabelle parallel aktualisieren**.
 | #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
-| #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
+| #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
 | #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben | `40a9b7b` + `f28d694` + `c12bb38` |
 
 ---
@@ -1478,7 +1478,7 @@ tatsächlich stört, hier ran.
 > Tagesevent angezeigt. Wenn der Termin einmal eine Zeit
 > bekommen hat dann geht es in beide Richtungen.
 
-**Status:** 🟡 erfasst — vermutet, aber nicht verifiziert
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-21
 
 ### Analyse

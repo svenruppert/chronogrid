@@ -265,6 +265,24 @@ public final class EventEditorDialog
       }
       if (start.getValue() != null) entry.setStart(start.getValue());
       if (end.getValue() != null) entry.setEnd(end.getValue());
+      // BUG #11: derive isAllDay from the actual datetime values
+      // rather than trusting the entry's pre-edit state. The
+      // dialog's DateTimePickers always carry a time component, so
+      // if either Start or End has a non-midnight time the user
+      // means a timed event. Both midnight collapses to an all-day
+      // event (which is also the semantics if the user dragged an
+      // all-day cell in the calendar). Catches the Stefan-Entry
+      // default-ambiguity that bit BUG #11 plus any edit path
+      // where the user switches between all-day and timed.
+      java.time.LocalDateTime startVal = start.getValue();
+      java.time.LocalDateTime endVal = end.getValue();
+      if (startVal != null && endVal != null) {
+        boolean bothMidnight = startVal.toLocalTime()
+            .equals(java.time.LocalTime.MIDNIGHT)
+            && endVal.toLocalTime()
+            .equals(java.time.LocalTime.MIDNIGHT);
+        entry.setAllDay(bothMidnight);
+      }
       EntryMapper.writeTags(entry, splitTags(tagsField.getValue()));
       URI target = calendarSelectFinal != null && calendarSelectFinal.getValue() != null
           ? calendarSelectFinal.getValue().uri()
