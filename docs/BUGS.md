@@ -42,7 +42,7 @@ Tabelle parallel aktualisieren**.
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
-| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex-Normalisierung + UI-Refresh + Writer Hex→Named | 🧪 fertig, Tests laufen — wartet auf 3. Smoke-Test | (pending commit) |
+| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer Hex→Named | ✅ behoben (Nextcloud-UI-Limitation für arbiträre Hex als Caveat) | `40a9b7b` + `f28d694` |
 
 ---
 
@@ -1633,8 +1633,21 @@ Browser-Smoke-Test. Geschätzt 30 Minuten.
 > wird, „verliert der Termin wieder seine Farbe, bzw. kommt
 > wohl nicht in Nextcloud an".
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test (drei Teile: Reader-Hex-Normalisierung + UI-Refresh + Writer Hex→Named für Nextcloud)
+**Status:** ✅ behoben 2026-06-22 in `40a9b7b` (Reader-Hex-Normalisierung) + `f28d694` (UI-Refresh + Writer Hex→Named). Sven-verifiziert für Reader + Writer-Roundtrip in unserer App. Verbleibende Caveat: Nextcloud-Web-UI rendert nur named CSS3 tokens, arbiträre Hex-Werte sind dort nicht sichtbar — als Provider-Limitation akzeptiert.
 **Filed:** 2026-06-21 (Erweiterung + Diagnose 2026-06-22)
+
+> **Akzeptierte Nextcloud-UI-Limitation:** Arbiträre Hex-Werte
+> (z.B. ein User-Pick von `#6bbd88` aus einem Color-Wheel) werden
+> von Nextcloud's eigener Web-UI nicht gerendert — sie zeigt nur
+> Farben deren COLOR-Property ein exaktes CSS3 named token ist.
+> Der Wert persistiert korrekt im iCalendar-Body und ist in unserer
+> App sowie für jeden anderen CalDAV-Client sichtbar. Falls Sven
+> Nextcloud-UI-Sichtbarkeit für einen Termin braucht, wählt er
+> bevorzugt benannte Farben (red, blue, olive, mediumseagreen
+> etc.) — unser Writer macht den Hex→Named-Konvert automatisch.
+> Workarounds wie nearest-named-Approximation oder
+> DESCRIPTION-Marker-für-Nextcloud wurden nach Abwägung des
+> Präzisions- vs. UI-Sichtbarkeits-Trade-offs verworfen.
 
 ### 2026-06-22 Diagnose-Update
 
