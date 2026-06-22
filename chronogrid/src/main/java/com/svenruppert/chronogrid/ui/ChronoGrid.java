@@ -152,6 +152,12 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_TB_CONNECTIONS = "calendar.toolbar.connections";
   private static final String K_TB_TAG_FILTER = "calendar.toolbar.tagFilter";
   private static final String K_TB_TAG_FILTER_PLACEHOLDER = "calendar.toolbar.tagFilter.placeholder";
+  // Schicht 1 of Planning-Feature #7: Quick-Toggle dropdown.
+  private static final String K_TB_VISIBILITY = "calendar.toolbar.visibility";
+  private static final String K_VISIBILITY_BULK_ON = "calendar.toolbar.visibility.bulkOn";
+  private static final String K_VISIBILITY_BULK_OFF = "calendar.toolbar.visibility.bulkOff";
+  private static final String K_VISIBILITY_EMPTY = "calendar.toolbar.visibility.empty";
+  private static final String K_VISIBILITY_HEADER = "calendar.toolbar.visibility.header";
   private static final String K_NOTIFY_SUB_REMOVED = "calendar.notify.subscription.removed";
   private static final String K_NOTIFY_SUB_HIDDEN = "calendar.notify.subscription.hidden";
   private static final String K_NOTIFY_SUB_SHOWN = "calendar.notify.subscription.shown";
@@ -466,8 +472,11 @@ public class ChronoGrid extends Composite<VerticalLayout>
       calendar.getEntryProvider().refreshAll();
     });
 
+    Button visibilityToggle = buildVisibilityToggle();
+
     HorizontalLayout actions = new HorizontalLayout(
-        tagFilter, settings, connections, subscriptions, refresh, newEvent);
+        tagFilter, settings, connections, visibilityToggle,
+        subscriptions, refresh, newEvent);
     actions.setAlignItems(FlexComponent.Alignment.END);
     actions.setSpacing(true);
 
@@ -476,6 +485,168 @@ public class ChronoGrid extends Composite<VerticalLayout>
     bar.setJustifyContentMode(FlexComponent.JustifyContentMode.BETWEEN);
     bar.setAlignItems(FlexComponent.Alignment.CENTER);
     return bar;
+  }
+
+  /**
+   * Planning-Feature #7 Schicht 1 — the Quick-Toggle dropdown. A
+   * single toolbar button shows the current visible-vs-total count
+   * (e.g. "Visible (3/7)") and opens a {@link com.vaadin.flow.component.popover.Popover}
+   * with a one-row-per-subscription toggle list plus bulk "show all"
+   * / "hide all" buttons. Rebuilt on every open so the list reflects
+   * fresh state and labels stay in sync after toggles from the
+   * legacy {@code SubscriptionsDialog} (which we keep around during
+   * the transition until Schicht 3 wires the Manager-Dialog).
+   *
+   * <p>Toggle handlers delegate to the existing
+   * {@link #toggleSubscriptionVisible(URI, boolean)} so persistence
+   * and notifications match the legacy path. Bulk-toggle uses
+   * {@link #setAllSubscriptionsVisible(boolean)} to coalesce into a
+   * single write + refresh instead of N calls.
+   */
+  private Button buildVisibilityToggle() {
+    Button trigger = new Button(VaadinIcon.EYE.create());
+    trigger.setId("calendar-toolbar-visibility");
+    trigger.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
+
+    com.vaadin.flow.component.popover.Popover popover =
+        new com.vaadin.flow.component.popover.Popover();
+    popover.setTarget(trigger);
+    popover.setWidth("280px");
+
+    Runnable refreshLabel = () -> {
+      List<CalendarSubscription> subs = stateStore.readSubscriptions();
+      long visible = subs.stream().filter(CalendarSubscription::visible).count();
+      trigger.setText(messages.tr(K_TB_VISIBILITY,
+          "Visible ({0}/{1})",
+          String.valueOf(visible),
+          String.valueOf(subs.size())));
+    };
+
+    Runnable rebuildContent = () -> {
+      popover.removeAll();
+      List<CalendarSubscription> subs = stateStore.readSubscriptions();
+
+      Span header = new Span(
+          messages.tr(K_VISIBILITY_HEADER, "Calendars in view"));
+      header.getStyle()
+          .set("font-weight", "600")
+          .set("padding", "var(--lumo-space-xs) 0");
+
+      if (subs.isEmpty()) {
+        Span empty = new Span(
+            messages.tr(K_VISIBILITY_EMPTY, "No subscriptions yet"));
+        empty.addClassName("chronogrid-secondary-text");
+        VerticalLayout emptyLayout = new VerticalLayout(header, empty);
+        emptyLayout.setPadding(false);
+        emptyLayout.setSpacing(false);
+        popover.add(emptyLayout);
+        return;
+      }
+
+      Button bulkOn = new Button(
+          messages.tr(K_VISIBILITY_BULK_ON, "Show all"),
+          e -> {
+            setAllSubscriptionsVisible(true);
+            popover.close();
+            refreshLabel.run();
+          });
+      bulkOn.addThemeVariants(ButtonVariant.LUMO_TERTIARY,
+          ButtonVariant.LUMO_SMALL);
+      Button bulkOff = new Button(
+          messages.tr(K_VISIBILITY_BULK_OFF, "Hide all"),
+          e -> {
+            setAllSubscriptionsVisible(false);
+            popover.close();
+            refreshLabel.run();
+          });
+      bulkOff.addThemeVariants(ButtonVariant.LUMO_TERTIARY,
+          ButtonVariant.LUMO_SMALL);
+
+      HorizontalLayout bulkRow = new HorizontalLayout(bulkOn, bulkOff);
+      bulkRow.setSpacing(true);
+      bulkRow.setPadding(false);
+
+      VerticalLayout rows = new VerticalLayout();
+      rows.setPadding(false);
+      rows.setSpacing(false);
+      for (CalendarSubscription s : subs) {
+        rows.add(buildVisibilityRow(s, refreshLabel));
+      }
+
+      VerticalLayout layout = new VerticalLayout(header, bulkRow, rows);
+      layout.setPadding(false);
+      layout.setSpacing(false);
+      popover.add(layout);
+    };
+
+    popover.addOpenedChangeListener(e -> {
+      if (e.isOpened()) rebuildContent.run();
+    });
+
+    refreshLabel.run();
+    return trigger;
+  }
+
+  /**
+   * One row in the visibility popover: a colour-dot plus the
+   * calendar's display-name plus a Checkbox tied to its
+   * {@code visible} flag. Delegates the toggle to
+   * {@link #toggleSubscriptionVisible(URI, boolean)} so persistence,
+   * refreshAll and the legacy notify-pair fire exactly once.
+   */
+  private com.vaadin.flow.component.Component buildVisibilityRow(
+      CalendarSubscription s, Runnable refreshLabel) {
+    com.vaadin.flow.component.html.Div dot =
+        new com.vaadin.flow.component.html.Div();
+    dot.getStyle()
+        .set("width", "10px")
+        .set("height", "10px")
+        .set("border-radius", "50%")
+        .set("background-color", s.color() != null ? s.color() : "transparent")
+        .set("flex-shrink", "0");
+
+    Span name = new Span(s.displayName());
+    name.getStyle().set("flex", "1");
+
+    com.vaadin.flow.component.checkbox.Checkbox check =
+        new com.vaadin.flow.component.checkbox.Checkbox(s.visible());
+    check.setId("visibility-toggle-" + s.uri().hashCode());
+    check.addValueChangeListener(ev -> {
+      toggleSubscriptionVisible(s.uri(), ev.getValue());
+      refreshLabel.run();
+    });
+
+    HorizontalLayout row = new HorizontalLayout(dot, name, check);
+    row.setAlignItems(FlexComponent.Alignment.CENTER);
+    row.setWidthFull();
+    row.setSpacing(true);
+    row.setPadding(false);
+    row.getStyle().set("padding", "var(--lumo-space-xs) 0");
+    return row;
+  }
+
+  /**
+   * Coalesces a "show all / hide all" bulk toggle into a single
+   * {@link CalendarStateStore} write plus one {@code refreshAll},
+   * instead of the N writes + N refreshes you'd get by calling
+   * {@link #toggleSubscriptionVisible(URI, boolean)} in a loop.
+   * No per-subscription notification — the bulk action is itself
+   * the signal.
+   */
+  private void setAllSubscriptionsVisible(boolean visible) {
+    java.util.List<CalendarSubscription> updated = new java.util.ArrayList<>();
+    boolean anyChange = false;
+    for (CalendarSubscription cs : stateStore.readSubscriptions()) {
+      if (cs.visible() == visible) {
+        updated.add(cs);
+      } else {
+        updated.add(cs.withVisible(visible));
+        anyChange = true;
+      }
+    }
+    if (!anyChange) return;
+    storeSubscriptions(updated);
+    calendar.getEntryProvider().refreshAll();
   }
 
   // ── navigation bar wiring ──────────────────────────────────────

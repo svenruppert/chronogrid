@@ -332,6 +332,41 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #7 Schicht 1: toolbar carries the visibility-toggle dropdown")
+  void visibilityToggleDropdownIsPresent() {
+    AppUser user = new AppUser(91L, "Visi User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    URI home = URI.create("https://caldav.icloud.com/u/calendars/home/");
+    URI work = URI.create("https://caldav.icloud.com/u/calendars/work/");
+    URI hobby = URI.create("https://caldav.icloud.com/u/calendars/hobby/");
+    // Three subscriptions, two visible — the trigger label MUST read
+    // "(2/3)" in either locale: the {0}/{1} placeholder pair is the
+    // contract that drives the at-a-glance toolbar count.
+    VaadinSession.getCurrent().setAttribute(
+        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        java.util.List.of(
+            new CalendarSubscription(home, "Home", "#1F77B4", true),
+            new CalendarSubscription(work, "Work", "#FF7F0E", true),
+            new CalendarSubscription(hobby, "Hobby", "#2CA02C", false)));
+
+    navigate(CalendarRouteView.class);
+
+    Button toggle = allDescendants(com.vaadin.flow.component.UI.getCurrent())
+        .filter(Button.class::isInstance)
+        .map(Button.class::cast)
+        .filter(b -> "calendar-toolbar-visibility".equals(b.getId().orElse(null)))
+        .findFirst()
+        .orElse(null);
+    assertNotNull(toggle, "toolbar must carry the visibility-toggle button "
+        + "with id 'calendar-toolbar-visibility'");
+    String text = toggle.getText();
+    assertTrue(text != null && text.contains("2") && text.contains("3"),
+        "visibility-toggle label must show 2 visible of 3 total; got: " + text);
+  }
+
+  @Test
   @DisplayName("Settings dialog exposes the iCloud quick-connect preset button")
   void settingsDialogCarriesIcloudPreset() throws Exception {
     AppUser user = new AppUser(80L, "Preset User",
