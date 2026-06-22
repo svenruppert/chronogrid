@@ -247,7 +247,19 @@ public final class EntryMapper {
         : (colourFromMarker != null && !colourFromMarker.isBlank())
             ? colourFromMarker : null;
     if (entryColour != null) {
-      entry.setCustomProperty(CUSTOM_ENTRY_COLOR, entryColour);
+      // BUG #12: Nextcloud writes COLOR as a CSS3 named token
+      // (e.g. `COLOR:darkkhaki`) instead of hex. RFC 7986 allows
+      // both, but the native HTML5 <input type="color"> picker in
+      // EventEditorDialog only accepts hex — without normalising
+      // here, the picker would default-fallback to #1f77b4 and the
+      // user would see "Wert vom Kalender" instead of the actual
+      // event colour. Normalise once at the boundary so every
+      // downstream consumer (picker, grid, popover dots) sees a
+      // consistent #rrggbb form. Unknown tokens pass through
+      // unchanged so any non-standard value is at least preserved
+      // for round-trip.
+      entry.setCustomProperty(CUSTOM_ENTRY_COLOR,
+          CssColorNames.toHex(entryColour));
     }
 
     String tags = readCategories(vevent);

@@ -42,7 +42,7 @@ Tabelle parallel aktualisieren**.
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
-| #12 | Per-Event-Farbe auf Nextcloud: beidseitiger Roundtrip-Verlust | 🟡 erfasst — brauche Nextcloud-iCal-Body zur Hypothesen-Auswahl | — |
+| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex-Normalisierung | 🔧 in Arbeit — Reader-Fix für CSS named tokens committet, Save-Pfad noch offen | (pending commit) |
 
 ---
 
@@ -1633,8 +1633,72 @@ Browser-Smoke-Test. Geschätzt 30 Minuten.
 > wird, „verliert der Termin wieder seine Farbe, bzw. kommt
 > wohl nicht in Nextcloud an".
 
-**Status:** 🟡 erfasst — beidseitig fehlerhafter Roundtrip; brauche Nextcloud-iCal-Body zur Diagnose
-**Filed:** 2026-06-21 (Erweiterung 2026-06-22)
+**Status:** 🔧 in Arbeit — Diagnose abgeschlossen, Teil-Fix für Reader (Hex-Normalisierung) committet; Save-Pfad noch offen
+**Filed:** 2026-06-21 (Erweiterung + Diagnose 2026-06-22)
+
+### 2026-06-22 Diagnose-Update
+
+Sven hat einen iCal-Body eines Nextcloud-Termins geliefert. Inhalt:
+
+```
+BEGIN:VEVENT
+UID:38da7c48-7b04-48dc-8aaf-a83a6d039c29
+SUMMARY:Zeitslot - grün
+DESCRIPTION:Hier kommen BEschreibungen rein
+COLOR:darkkhaki
+CATEGORIES:tag 2
+DTSTART;TZID=/Europe/Berlin:20260611T080000
+DTEND;TZID=/Europe/Berlin:20260611T130000
+END:VEVENT
+```
+
+**Diagnose:** Nextcloud schreibt RFC-7986 `COLOR` korrekt — aber
+als **CSS3 named token** (`darkkhaki`), nicht als hex literal
+(`#bdb76b`). RFC 7986 §3.8.1.16 erlaubt beides; die Spec sagt
+„any CSS colour value". Damit waren Hypothesen A (Collection-
+Property), B (X-Property) und D (PUT-Strip) **widerlegt**:
+Nextcloud round-trippt COLOR korrekt, in beide Richtungen.
+
+**Echter Bruch:** unser nativer HTML5 `<input type="color">`
+Picker im `EventEditorDialog` akzeptiert nur `#rrggbb`. Mein
+`normaliseColor` Helper warf `darkkhaki` auf den Fallback
+`#1f77b4` (Default-Blau) — deshalb sah Sven „Wert vom Kalender"
+im Picker, obwohl der Termin im Grid die richtige Farbe hatte
+(Grid akzeptiert CSS named colors direkt über
+`entry.setBackgroundColor("darkkhaki")`).
+
+Beim Save passierte ggf. Folgendes: Sven öffnete den Dialog,
+Picker zeigte `#1f77b4`, Sven änderte ihn (oder nicht), Save
+schrieb den Hex-Wert nach Nextcloud, Nextcloud akzeptierte
+`COLOR:#xxxxxx`, beim nächsten Read kam der Hex-Wert zurück, der
+Grid zeigte Hex. „passiert nichts" könnte heißen: Sven sah keine
+sichtbare Änderung weil entweder (a) er nichts geändert hatte
+ohne es zu merken (Picker stand auf Default und blieb dort) oder
+(b) die UI re-paintete nicht sofort. Müsste mit dem Hex-Fix
+geklärt werden.
+
+### Teil-Fix in `<COMMIT>` — Reader-seitige Normalisierung
+
+`EntryMapper.toEntry` normalisiert CSS named tokens jetzt zu Hex
+über einen neuen `CssColorNames`-Lookup. Folge: nach jedem Read
+ist `CUSTOM_ENTRY_COLOR` immer entweder Hex oder ein unbekannter
+Token (pass-through), niemals ein bekannter CSS named token.
+Damit zeigt der Picker beim Dialog-Open die tatsächliche Farbe.
+
+`CssColorNames` enthält die volle CSS3-Liste (147 Einträge inkl.
+gray/grey-Doppelungen + `rebeccapurple`), case-insensitive,
+whitespace-tolerant, mit pass-through für unbekannte Tokens.
+
+### Was noch offen ist
+
+Sven muss verifizieren ob nach diesem Fix:
+1. Der Picker bei einem Nextcloud-Termin mit `COLOR:darkkhaki`
+   die richtige Khaki-Farbe zeigt (statt Default-Blau).
+2. Beim Save einer geänderten Farbe der neue Hex-Wert sichtbar
+   in Grid + Nextcloud-UI ankommt.
+
+Wenn (1) klappt aber (2) nicht: liegt ein eigenständiger Save-
+Bug vor, dann zurück zur Diagnose.
 
 ### Analyse
 
