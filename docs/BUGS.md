@@ -41,7 +41,7 @@ Tabelle parallel aktualisieren**.
 | #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
-| #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
+| #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | ✅ behoben | `968038d` |
 | #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben | `40a9b7b` + `f28d694` + `c12bb38` |
 
 ---
@@ -1478,7 +1478,7 @@ tatsächlich stört, hier ran.
 > Tagesevent angezeigt. Wenn der Termin einmal eine Zeit
 > bekommen hat dann geht es in beide Richtungen.
 
-**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
+**Status:** ✅ behoben 2026-06-22 in `968038d` (`openNewEventEditor` setzt explizit `setAllDay(false)`; EventEditorDialog leitet `setAllDay` aus den DateTimePicker-Werten ab). Sven-verifiziert via Infomaniak-iCal-Export: `DTSTART:20260622T100000Z` + `DTEND:20260622T103000Z` (DATE-TIME UTC) statt DATE-only.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -1956,3 +1956,8 @@ fromConnections, 1–2 Stunden.
   iCloud hat selbst eine Collection-Level-Color. Wenn unser
   Read-Pfad das auch hochziehen würde, wäre der Default-Color-
   Pfad symmetrisch zu Nextcloud — Konsistenz-Gewinn.
+
+
+## BUG - Zeitzonen werden wohl nicht mitgegeben wenn ein Termin in der UI Erstellt wird. Das muss natürlich auswählbar sein.
+
+## BUG - Die Schrift in der Kalenderübersicht ist weiß. Das ist bei hellen Farbtönen der Kalendereinträge wie hell gelb, nicht lesbar. Die Schriftart muss umschaltbar sein und zu dem jeweiligen Theme passen
