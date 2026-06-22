@@ -411,6 +411,75 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #7 Schicht 3: openConnectionManagerDialog mounts the master-detail dialog with id + server tabs + per-sub controls")
+  void connectionManagerDialogStructure() throws Exception {
+    AppUser user = new AppUser(93L, "Manager User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    // Seed: one server, two subscriptions on it.
+    String serverId = "srv-mgr-1";
+    URI base = URI.create("https://caldav.example/u/");
+    VaadinSession.getCurrent().setAttribute(
+        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
+            .SESSION_KEY_SERVERS,
+        java.util.List.of(new CalDavServerConnection(serverId,
+            "Test Account", base, "user", "pw")));
+    URI subA = URI.create("https://caldav.example/u/personal/");
+    URI subB = URI.create("https://caldav.example/u/family/");
+    VaadinSession.getCurrent().setAttribute(
+        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        java.util.List.of(
+            new CalendarSubscription(subA, "Personal", "#1F77B4", true, serverId),
+            new CalendarSubscription(subB, "Family", "#FF7F0E", false, serverId)));
+
+    navigate(CalendarRouteView.class);
+    ChronoGrid view = findCalendarView();
+    java.lang.reflect.Method openMgr =
+        ChronoGrid.class.getDeclaredMethod("openConnectionManagerDialog");
+    openMgr.setAccessible(true);
+    com.vaadin.flow.component.dialog.Dialog dialog =
+        (com.vaadin.flow.component.dialog.Dialog) openMgr.invoke(view);
+
+    assertEquals("calendar-manager", dialog.getId().orElse(null),
+        "manager dialog must carry the test selector id");
+
+    java.util.Set<String> ids = allDescendants(dialog)
+        .map(c -> c.getId().orElse(""))
+        .filter(s -> !s.isEmpty())
+        .collect(java.util.stream.Collectors.toSet());
+
+    assertTrue(ids.contains("calendar-manager-server-tab-" + serverId),
+        "left pane must show a tab per server; saw: " + ids);
+    assertTrue(ids.contains("calendar-manager-rediscover"),
+        "right pane must expose Re-discover button; saw: " + ids);
+    assertTrue(ids.contains("calendar-manager-remove-server"),
+        "right pane must expose Remove-server button; saw: " + ids);
+    // Per-subscription rows for both seeded subs (visibility-toggle id).
+    assertTrue(ids.contains("manager-sub-visible-" + Integer.toHexString(subA.hashCode())),
+        "sub-row must expose visibility toggle for Personal; saw: " + ids);
+    assertTrue(ids.contains("manager-sub-visible-" + Integer.toHexString(subB.hashCode())),
+        "sub-row must expose visibility toggle for Family; saw: " + ids);
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #7 Schicht 3: toolbar carries the Connection-Manager button")
+  void connectionManagerToolbarButtonIsPresent() {
+    AppUser user = new AppUser(94L, "Mgr Toolbar",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    navigate(CalendarRouteView.class);
+
+    boolean sawButton = allDescendants(com.vaadin.flow.component.UI.getCurrent())
+        .filter(Button.class::isInstance)
+        .map(Button.class::cast)
+        .anyMatch(b -> "calendar-toolbar-manager".equals(b.getId().orElse(null)));
+    assertTrue(sawButton,
+        "toolbar must carry the Connection-Manager button with id 'calendar-toolbar-manager'");
+  }
+
+  @Test
   @DisplayName("Planning-Feature #7 Schicht 2: hybrid default-visibility threshold is 5")
   void wizardHybridThresholdConstant() {
     // The hybrid default-visibility rule (≤5 auto-on, >5 auto-off)

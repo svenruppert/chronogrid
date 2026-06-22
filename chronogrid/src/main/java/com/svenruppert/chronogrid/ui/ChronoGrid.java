@@ -152,6 +152,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_TB_CONNECTIONS = "calendar.toolbar.connections";
   private static final String K_TB_TAG_FILTER = "calendar.toolbar.tagFilter";
   private static final String K_TB_TAG_FILTER_PLACEHOLDER = "calendar.toolbar.tagFilter.placeholder";
+  private static final String K_TB_MANAGER = "calendar.toolbar.manager";
   // Schicht 1 of Planning-Feature #7: Quick-Toggle dropdown.
   private static final String K_TB_VISIBILITY = "calendar.toolbar.visibility";
   private static final String K_VISIBILITY_BULK_ON = "calendar.toolbar.visibility.bulkOn";
@@ -428,6 +429,15 @@ public class ChronoGrid extends Composite<VerticalLayout>
     connections.setId("calendar-toolbar-connections");
     connections.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
 
+    // Planning-Feature #7 Schicht 3: the Connection Manager replaces
+    // Settings + Connections + Subscriptions. Coexists with the
+    // three legacy buttons during this transition Schicht — Schicht
+    // 3b deletes them.
+    Button manager = new Button(messages.tr(K_TB_MANAGER, "Connection Manager"),
+        VaadinIcon.SERVER.create(), e -> openConnectionManagerDialog());
+    manager.setId("calendar-toolbar-manager");
+    manager.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
+
     Button subscriptions = new Button(messages.tr(K_TB_SUBSCRIPTIONS, "Subscriptions"),
         VaadinIcon.LAYOUT.create(), e -> openSubscriptionsDialog());
     subscriptions.setId("calendar-toolbar-subscriptions");
@@ -475,7 +485,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
     Button visibilityToggle = buildVisibilityToggle();
 
     HorizontalLayout actions = new HorizontalLayout(
-        tagFilter, settings, connections, visibilityToggle,
+        tagFilter, settings, connections, manager, visibilityToggle,
         subscriptions, refresh, newEvent);
     actions.setAlignItems(FlexComponent.Alignment.END);
     actions.setSpacing(true);
@@ -1629,6 +1639,102 @@ public class ChronoGrid extends Composite<VerticalLayout>
         this::changeSubscriptionColor,
         this::removeSubscription);
     dialog.open();
+  }
+
+  /**
+   * Planning-Feature #7 Schicht 3: the Apple-Calendar-style
+   * Connection Manager. Vertical server tabs on the left, per-server
+   * subscription list on the right with inline visibility-toggle +
+   * colour-picker + per-sub remove. Footer "+ Add server" delegates
+   * to {@link #openConnectionWizard()}; per-server actions are
+   * Re-discover and Remove server (atomic).
+   */
+  Dialog openConnectionManagerDialog() {
+    ConnectionManagerDialog manager = new ConnectionManagerDialog(
+        messages,
+        () -> stateStore.readServers(),
+        () -> stateStore.readSubscriptions(),
+        this::openConnectionWizard,
+        this::rediscoverServer,
+        this::removeServerAtomic,
+        this::toggleSubscriptionVisible,
+        this::changeSubscriptionColor,
+        this::removeSubscription);
+    manager.open();
+    return manager.getContent();
+  }
+
+  /**
+   * Re-runs CalDAV discovery against the given server's URL +
+   * credentials and merges any newly-found calendars as
+   * {@code visible=false} subscriptions (so a Nextcloud workspace
+   * that grew by 5 calendars overnight doesn't suddenly flood the
+   * grid). Pre-existing subscriptions are left untouched.
+   */
+  private void rediscoverServer(String serverId) {
+    CalDavServerConnection server = stateStore.readServers().stream()
+        .filter(s -> s.id().equals(serverId)).findFirst().orElse(null);
+    if (server == null) return;
+    try {
+      List<DiscoveredCalendar> found = new CalDavDiscovery().discover(
+          server.baseUri(), server.username(), server.password());
+      java.util.Set<URI> known = stateStore.readSubscriptions().stream()
+          .filter(s -> serverId.equals(s.serverId()))
+          .map(CalendarSubscription::uri)
+          .collect(java.util.stream.Collectors.toSet());
+      List<CalendarSubscription> appended =
+          new java.util.ArrayList<>(stateStore.readSubscriptions());
+      int added = 0;
+      for (DiscoveredCalendar dc : found) {
+        if (known.contains(dc.href())) continue;
+        appended.add(new CalendarSubscription(dc.href(),
+            dc.displayName(), dc.color(), false, serverId));
+        added++;
+      }
+      if (added > 0) {
+        storeSubscriptions(appended);
+        rebuildServiceFromSubscriptions();
+        calendar.getEntryProvider().refreshAll();
+      }
+      notifyInfo(messages.tr(K_NOTIFY_DISCOVERY_FOUND,
+          "Found {0} calendar(s)", String.valueOf(found.size())));
+    } catch (RuntimeException ex) {
+      logger().info("Rediscovery against {} failed: {}",
+          server.baseUri(), ex.toString());
+      notifyError(messages.tr(K_NOTIFY_DISCOVERY_FAIL,
+          "Discovery failed: {0}", friendlyError(ex)));
+    }
+  }
+
+  /**
+   * Atomic "remove server" — drops the server entry AND every
+   * subscription that referenced it AND every per-entry colour
+   * fallback persisted for those subscriptions' URIs. The user
+   * thinks of "disconnect this account" as a single action; the
+   * UX in the manager dialog should match.
+   */
+  private void removeServerAtomic(String serverId) {
+    java.util.List<CalendarSubscription> kept = new java.util.ArrayList<>();
+    java.util.List<URI> droppedUris = new java.util.ArrayList<>();
+    for (CalendarSubscription cs : stateStore.readSubscriptions()) {
+      if (serverId.equals(cs.serverId())) {
+        droppedUris.add(cs.uri());
+      } else {
+        kept.add(cs);
+      }
+    }
+    storeSubscriptions(kept);
+    pruneOrphanServers();
+    // Clear per-URI colour fallbacks for every dropped sub — the
+    // BUG-#2 local store would otherwise hold colour entries for
+    // URIs the user just disconnected from.
+    for (URI uri : droppedUris) {
+      stateStore.clearEntryColour(uri.toString());
+    }
+    rebuildServiceFromSubscriptions();
+    calendar.getEntryProvider().refreshAll();
+    notifyInfo(messages.tr(K_NOTIFY_SUB_REMOVED,
+        "Disconnected from “{0}”.", serverId));
   }
 
   private void changeSubscriptionColor(URI uri, String color) {
