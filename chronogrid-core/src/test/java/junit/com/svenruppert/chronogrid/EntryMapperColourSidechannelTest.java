@@ -253,7 +253,7 @@ class EntryMapperColourSidechannelTest {
   // ── BUG #7: Apple-only DESCRIPTION-marker switch ─────────────
 
   @Test
-  @DisplayName("BUG #7: appleSidechannel=false suppresses the DESCRIPTION marker (Nextcloud etc.)")
+  @DisplayName("BUG #7: NextcloudProvider suppresses the DESCRIPTION marker")
   void writeSkipsMarkerForNonApple() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("non-apple-uid");
@@ -263,20 +263,24 @@ class EntryMapperColourSidechannelTest {
     entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
     entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#aabbcc");
 
-    String body = mapper.toICalendarText(entry, false);
+    String body = mapper.toICalendarText(entry,
+        new com.svenruppert.chronogrid.provider.NextcloudProvider());
 
-    assertTrue(body.contains("COLOR:#aabbcc"),
-        "Standard COLOR must still be written — non-Apple providers "
-            + "round-trip it correctly; got:\n" + body);
+    // NextcloudProvider snaps arbitrary hex to nearest CSS3 named
+    // (#aabbcc → nearest match); the exact named token doesn't
+    // matter for this test, but the COLOR property must be present
+    // AND the DESCRIPTION marker must not.
+    assertTrue(body.contains("COLOR:"),
+        "Standard COLOR must still be written; got:\n" + body);
     assertFalse(body.contains("[chronogrid-color:"),
-        "DESCRIPTION-marker must NOT be written when appleSidechannel=false — "
-            + "would show up as visible noise in non-Apple UIs; got:\n" + body);
+        "DESCRIPTION-marker must NOT be written for non-Apple providers — "
+            + "would show up as visible noise in their UIs; got:\n" + body);
     assertTrue(body.contains("plain notes"),
         "User description must pass through unchanged.");
   }
 
   @Test
-  @DisplayName("BUG #7: appleSidechannel=true (default) emits the marker (iCloud)")
+  @DisplayName("BUG #7: AppleProvider emits the marker AND keeps hex")
   void writeEmitsMarkerForApple() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("apple-uid");
@@ -285,7 +289,8 @@ class EntryMapperColourSidechannelTest {
     entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
     entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#ff0000");
 
-    String body = mapper.toICalendarText(entry, true);
+    String body = mapper.toICalendarText(entry,
+        new com.svenruppert.chronogrid.provider.AppleProvider());
 
     assertTrue(body.contains("COLOR:#ff0000"));
     assertTrue(body.contains("[chronogrid-color: #ff0000]"),
@@ -295,12 +300,11 @@ class EntryMapperColourSidechannelTest {
   }
 
   @Test
-  @DisplayName("BUG #7: reader is unchanged — picks up the marker even when written by the Apple path")
+  @DisplayName("BUG #7: reader picks up the marker on read regardless of which provider wrote it")
   void readerStillFindsMarkerRegardlessOfTargetSwitch() {
-    // Simulates an entry that was written with appleSidechannel=true
-    // (iCloud target) and is now being read back. Verifies the
-    // single-arg toICalendarText helper still defaults to Apple-on,
-    // so any consumer that didn't migrate keeps working.
+    // Simulates an entry that was written by AppleProvider and is
+    // now being read back. The reader path doesn't know the
+    // provider — it just looks for COLOR first, marker second.
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry written = new Entry("rt-uid");
     written.setTitle("Round trip");
@@ -308,12 +312,13 @@ class EntryMapperColourSidechannelTest {
     written.setEnd(LocalDateTime.of(2026, Month.JUNE, 14, 11, 0));
     written.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#123456");
 
-    String body = mapper.toICalendarText(written); // single-arg → marker ON
+    String body = mapper.toICalendarText(written,
+        new com.svenruppert.chronogrid.provider.AppleProvider());
     Entry read = mapper.toEntry(new RemoteEvent(
         URI.create("http://host/cal/rt.ics"), "\"e1\"", body));
 
     assertTrue(body.contains("[chronogrid-color: #123456]"),
-        "Single-arg overload must default to marker-on (Apple-safe).");
+        "AppleProvider must emit the marker.");
     assertEquals("#123456",
         read.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR));
   }

@@ -125,6 +125,76 @@ class EntryMapperTest {
   }
 
   @Test
+  @DisplayName("BUG #14: timed events without explicit TZID get the provider default timezone")
+  void timedEventGetsProviderDefaultTzid() {
+    // Stub provider that pins a deterministic timezone so the
+    // test is not host-dependent.
+    com.svenruppert.chronogrid.provider.CalDavProviderProfile berlin =
+        new com.svenruppert.chronogrid.provider.CalDavProviderProfile() {
+          @Override
+          public String id() {
+            return "berlin-stub";
+          }
+
+          @Override
+          public boolean matches(URI uri) {
+            return false;
+          }
+
+          @Override
+          public String formatColor(String hex) {
+            return hex;
+          }
+
+          @Override
+          public boolean writeDescriptionMarker() {
+            return false;
+          }
+
+          @Override
+          public java.time.ZoneId defaultTimezone() {
+            return java.time.ZoneId.of("Europe/Berlin");
+          }
+        };
+
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("tz-uid");
+    entry.setTitle("Berlin event");
+    entry.setStart(LocalDateTime.of(2026, Month.JUNE, 11, 8, 0));
+    entry.setEnd(LocalDateTime.of(2026, Month.JUNE, 11, 13, 0));
+    entry.setAllDay(false);
+
+    String body = mapper.toICalendarText(entry, berlin);
+
+    // Biweekly may emit either `TZID=Europe/Berlin` or
+    // `TZID=/Europe/Berlin` depending on its internal handling
+    // — accept both.
+    assertTrue(body.contains("TZID=Europe/Berlin")
+        || body.contains("TZID=/Europe/Berlin"),
+        "Timed event without explicit CUSTOM_TZID must inherit the "
+            + "provider's defaultTimezone() and emit a TZID parameter; got:\n"
+            + body);
+  }
+
+  @Test
+  @DisplayName("BUG #14: all-day events do NOT get a TZID (preserves DATE-only semantics)")
+  void allDayEventNoTzid() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("allday-uid");
+    entry.setTitle("Sven on PTO");
+    entry.setStart(LocalDateTime.of(2026, Month.JULY, 20, 0, 0));
+    entry.setEnd(LocalDateTime.of(2026, Month.JULY, 25, 0, 0));
+    entry.setAllDay(true);
+
+    String body = mapper.toICalendarText(entry,
+        new com.svenruppert.chronogrid.provider.GenericProvider());
+
+    assertFalse(body.contains("TZID="),
+        "All-day events use VALUE=DATE; emitting a TZID would be a "
+            + "spec violation; got:\n" + body);
+  }
+
+  @Test
   @DisplayName("BUG #11: explicit setAllDay(false) produces a DATE-TIME DTSTART, not DATE")
   void timedEventEmitsDateTimeNotDate() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
@@ -140,10 +210,10 @@ class EntryMapperTest {
     // body must contain a DATE-TIME form (T-separator + HHmmss),
     // NOT a DATE-only form (no time component, often with
     // ;VALUE=DATE).
-    assertTrue(body.contains("DTSTART:20260611T080000Z"),
-        "Timed events must serialise DTSTART as DATE-TIME UTC; got:\n" + body);
-    assertTrue(body.contains("DTEND:20260611T130000Z"),
-        "Timed events must serialise DTEND as DATE-TIME UTC; got:\n" + body);
+    assertTrue(body.contains("T080000"),
+        "Timed events must serialise DTSTART with a time component (T080000); got:\n" + body);
+    assertTrue(body.contains("T130000"),
+        "Timed events must serialise DTEND with a time component (T130000); got:\n" + body);
     assertFalse(body.contains("VALUE=DATE"),
         "Timed events must NOT emit VALUE=DATE — that's the Nextcloud-renders-"
             + "as-all-day failure mode; got:\n" + body);

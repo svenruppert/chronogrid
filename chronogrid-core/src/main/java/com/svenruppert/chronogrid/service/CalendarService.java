@@ -225,14 +225,23 @@ public final class CalendarService implements HasLogger {
   public static void applyColours(Entry entry, String calendarColor) {
     entry.setCustomProperty(CUSTOM_CALENDAR_COLOR, calendarColor);
     String individualColor = entry.getCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR);
+    String effectiveBackground;
     if (individualColor != null && !individualColor.isBlank()) {
       entry.setBackgroundColor(individualColor);
       entry.setBorderColor(calendarColor);
+      effectiveBackground = individualColor;
     } else {
       // No user-set colour: fall back to the calendar colour for both
       // (uniform look — same as the pre-v01.00.00 behaviour).
       entry.setColor(calendarColor);
+      effectiveBackground = calendarColor;
     }
+    // BUG #15: FullCalendar defaults the event text to white,
+    // which becomes unreadable when the user picks a pale fill
+    // (lightyellow, #ffffe0, etc.). Compute the readable colour
+    // from the effective background via WCAG contrast.
+    entry.setTextColor(
+        com.svenruppert.chronogrid.mapping.ContrastTextColor.pickFor(effectiveBackground));
   }
 
   /**
@@ -348,21 +357,6 @@ public final class CalendarService implements HasLogger {
    * {@code uri} — falls back to {@link #primary} when nothing
    * matches (e.g. a brand-new event with no explicit target).
    */
-  /**
-   * @deprecated Apple-detection now lives in
-   *     {@link com.svenruppert.chronogrid.provider.AppleProvider#matches(URI)}.
-   *     Existing tests keep using this delegator until they get
-   *     migrated to {@code ProviderRegistry.forUri(...)}.
-   */
-  @Deprecated
-  public static boolean isAppleProviderUri(URI uri) {
-    if (uri == null) return false;
-    String host = uri.getHost();
-    if (host == null) return false;
-    host = host.toLowerCase(java.util.Locale.ROOT);
-    return host.equals("icloud.com") || host.endsWith(".icloud.com");
-  }
-
   private CalDavClient pickClient(URI uri) {
     if (uri == null) return primary;
     for (CalDavClient c : readClients) {

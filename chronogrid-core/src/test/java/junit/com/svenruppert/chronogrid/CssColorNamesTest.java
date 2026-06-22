@@ -185,7 +185,7 @@ class CssColorNamesTest {
   }
 
   @Test
-  @DisplayName("EntryMapper writes a named token to non-Apple targets when an exact match exists")
+  @DisplayName("EntryMapper writes a named token via NextcloudProvider on exact hex match")
   void writeNamedForNextcloudOnExactMatch() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("nextcloud-uid");
@@ -194,8 +194,8 @@ class CssColorNamesTest {
     entry.setEnd(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 13, 0));
     entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#808000");
 
-    // preferNamedColors=true → Nextcloud-target write
-    String body = mapper.toICalendarText(entry, false, true);
+    String body = mapper.toICalendarText(entry,
+        new com.svenruppert.chronogrid.provider.NextcloudProvider());
 
     org.junit.jupiter.api.Assertions.assertTrue(body.contains("COLOR:olive"),
         "Exact hex matches must be written as canonical named tokens so "
@@ -205,7 +205,7 @@ class CssColorNamesTest {
   }
 
   @Test
-  @DisplayName("BUG #12 final fix: arbitrary hex snaps to nearest CSS3 named for non-Apple targets")
+  @DisplayName("BUG #12 final fix: arbitrary hex snaps to nearest CSS3 named via NextcloudProvider")
   void writeSnapsArbitraryHexToNearestNamedForNextcloud() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("arbitrary-uid");
@@ -218,7 +218,8 @@ class CssColorNamesTest {
     // pill. Sven accepted the precision trade-off.
     entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#6bbd88");
 
-    String body = mapper.toICalendarText(entry, false, true);
+    String body = mapper.toICalendarText(entry,
+        new com.svenruppert.chronogrid.provider.NextcloudProvider());
 
     org.junit.jupiter.api.Assertions.assertFalse(body.contains("COLOR:#6bbd88"),
         "Hex form must NOT appear when snap-to-nearest is on — "
@@ -230,7 +231,7 @@ class CssColorNamesTest {
   }
 
   @Test
-  @DisplayName("EntryMapper keeps hex when preferNamedColors=false (= Apple target)")
+  @DisplayName("EntryMapper keeps hex via AppleProvider (preserves precision for marker fallback)")
   void writeKeepsHexForApple() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("apple-uid");
@@ -239,8 +240,8 @@ class CssColorNamesTest {
     entry.setEnd(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 13, 0));
     entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#808000");
 
-    // appleSidechannel=true, preferNamedColors=false → Apple target
-    String body = mapper.toICalendarText(entry, true, false);
+    String body = mapper.toICalendarText(entry,
+        new com.svenruppert.chronogrid.provider.AppleProvider());
 
     org.junit.jupiter.api.Assertions.assertTrue(body.contains("COLOR:#808000"),
         "Apple target keeps hex (matches the BUG #2 DESCRIPTION-marker "

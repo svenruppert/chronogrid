@@ -44,8 +44,8 @@ Tabelle parallel aktualisieren**.
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | ✅ behoben | `968038d` |
 | #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben | `40a9b7b` + `f28d694` + `c12bb38` |
 | #13 | Infomaniak-Web-UI zeigt Per-Event-Farbe nicht (Provider-UI-Limitation) | ⚫ verworfen — Daten korrekt, Provider-Feature-Lücke | — |
-| #14 | Zeitzone wird bei neu erstellten Terminen nicht mitgegeben (TZID-Selector fehlt) | 🟡 erfasst — vermutet, brauche iCal-Body-Check | — |
-| #15 | Termin-Schrift in Übersicht weiß → unlesbar bei hellen Custom-Farben | 🔬 analysiert — Kontrast-Auto-Pick als v1-Fix | — |
+| #14 | Zeitzone wird bei neu erstellten Terminen nicht mitgegeben (TZID-Selector fehlt) | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
+| #15 | Termin-Schrift in Übersicht weiß → unlesbar bei hellen Custom-Farben | 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test | (pending commit) |
 
 ---
 
@@ -2048,7 +2048,7 @@ M-L, Trial-and-Error-Aufwand, ungewisser Ausgang.
 > Termin in der UI Erstellt wird. Das muss natürlich auswählbar
 > sein.
 
-**Status:** 🟡 erfasst — vermutet, brauche Verifikation via iCal-Body-Check
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-22
 
 ### Analyse
@@ -2159,7 +2159,7 @@ Tests. Geschätzt 1-2 Stunden inkl. Smoke-Test.
 > gelb, nicht lesbar. Die Schriftart muss umschaltbar sein und
 > zu dem jeweiligen Theme passen.
 
-**Status:** 🔬 analysiert
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test
 **Filed:** 2026-06-22
 
 ### Analyse

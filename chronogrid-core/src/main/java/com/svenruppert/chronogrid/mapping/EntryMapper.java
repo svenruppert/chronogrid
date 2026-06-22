@@ -381,51 +381,6 @@ public final class EntryMapper {
   }
 
   /**
-   * @deprecated Use {@link #toICalendarText(Entry, com.svenruppert.chronogrid.provider.CalDavProviderProfile)}
-   *     instead. The boolean cascade was replaced by the
-   *     {@code provider} package as the project grew past
-   *     three providers (Apple, Nextcloud, Infomaniak).
-   */
-  @Deprecated
-  public String toICalendarText(Entry entry, boolean appleSidechannel) {
-    return toICalendarText(entry, appleSidechannel, false);
-  }
-
-  /**
-   * @deprecated Use {@link #toICalendarText(Entry, com.svenruppert.chronogrid.provider.CalDavProviderProfile)}
-   *     instead.
-   */
-  @Deprecated
-  public String toICalendarText(Entry entry, boolean appleSidechannel,
-                                boolean preferNamedColors) {
-    // Bridge: synthesise a one-off profile that captures the legacy
-    // booleans so existing tests stay green during the migration.
-    com.svenruppert.chronogrid.provider.CalDavProviderProfile legacy =
-        new com.svenruppert.chronogrid.provider.CalDavProviderProfile() {
-          @Override
-          public String id() {
-            return "legacy-bridge";
-          }
-
-          @Override
-          public boolean matches(java.net.URI uri) {
-            return false;
-          }
-
-          @Override
-          public String formatColor(String hex) {
-            return preferNamedColors ? CssColorNames.toNameOrNearest(hex) : hex;
-          }
-
-          @Override
-          public boolean writeDescriptionMarker() {
-            return appleSidechannel;
-          }
-        };
-    return toICalendarText(entry, legacy);
-  }
-
-  /**
    * Canonical provider-aware writer. Looks up
    * {@code provider.formatColor} and {@code provider.writeDescriptionMarker}
    * to delegate the per-provider serialisation quirks. Replaces
@@ -474,7 +429,17 @@ public final class EntryMapper {
     writeCategories(vevent, entry.getCustomProperty(CUSTOM_CATEGORIES));
 
     boolean allDay = Boolean.TRUE.equals(entry.isAllDay());
+    // BUG #14: for timed events ALWAYS emit a TZID so cross-
+    // timezone sharing works. CUSTOM_TZID (set on read in
+    // toEntry, optionally writeable from the editor) wins;
+    // otherwise the provider's defaultTimezone() supplies a
+    // sensible default — system-default for Generic/Apple/
+    // Nextcloud/Infomaniak, overridable per provider when a
+    // server has a known TZID quirk.
     String tzid = entry.getCustomProperty(CUSTOM_TZID);
+    if (!allDay && (tzid == null || tzid.isBlank())) {
+      tzid = provider.defaultTimezone().getId();
+    }
     ZoneId zone = resolveZone(tzid);
 
     LocalDateTime start = entry.getStart();

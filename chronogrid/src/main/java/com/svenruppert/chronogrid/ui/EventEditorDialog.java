@@ -81,6 +81,8 @@ public final class EventEditorDialog
   private static final String K_FIELD_TAGS_HINT = "calendar.field.tags.hint";
   private static final String K_FIELD_START = "calendar.field.start";
   private static final String K_FIELD_END = "calendar.field.end";
+  private static final String K_FIELD_TIMEZONE = "calendar.field.timezone";
+  private static final String K_FIELD_TIMEZONE_HINT = "calendar.field.timezone.hint";
   private static final String K_FIELD_CALENDAR = "calendar.field.calendar";
   private static final String K_FIELD_SERVER_FILTER = "calendar.field.serverFilter";
   private static final String K_SERVER_ALL = "calendar.field.serverFilter.all";
@@ -184,6 +186,34 @@ public final class EventEditorDialog
     DateTimePicker end = new DateTimePicker(messages.tr(K_FIELD_END, "End"));
     end.setValue(entry.getEnd());
 
+    // BUG #14: explicit Timezone selector. Cross-timezone sharing
+    // breaks when a Berlin user creates an event with UTC-suffixed
+    // DTSTART — receivers in other zones see the wrong wall-clock
+    // time. The Select<String> persists the chosen ZoneId onto
+    // CUSTOM_TZID; EntryMapper.toICalendarText picks it up and
+    // emits the right TZID parameter, falling back to the
+    // provider's defaultTimezone() if unset.
+    com.vaadin.flow.component.select.Select<String> timezoneSelect =
+        new com.vaadin.flow.component.select.Select<>();
+    timezoneSelect.setLabel(messages.tr(K_FIELD_TIMEZONE, "Timezone"));
+    timezoneSelect.setHelperText(messages.tr(K_FIELD_TIMEZONE_HINT,
+        "Wallclock time interpretation. Set to your local timezone for "
+            + "events scheduled at a specific local time."));
+    timezoneSelect.setWidthFull();
+    java.util.List<String> zoneIds = java.time.ZoneId.getAvailableZoneIds().stream()
+        .sorted()
+        .collect(java.util.stream.Collectors.toList());
+    timezoneSelect.setItems(zoneIds);
+    String storedTzid = entry.getCustomProperty(EntryMapper.CUSTOM_TZID);
+    if (storedTzid != null && !storedTzid.isBlank() && zoneIds.contains(storedTzid)) {
+      timezoneSelect.setValue(storedTzid);
+    } else {
+      // Default to system timezone — same default the provider's
+      // defaultTimezone() returns for the Generic case. User sees
+      // the value populated so it's clear which TZID will be written.
+      timezoneSelect.setValue(java.time.ZoneId.systemDefault().getId());
+    }
+
     // Per-entry colour controls. The user can opt in to overriding
     // the calendar's default colour; the calendar colour stays on the
     // entry's border so the multi-calendar provenance is preserved
@@ -247,7 +277,8 @@ public final class EventEditorDialog
     form.setSpacing(true);
     if (serverFilter != null) form.add(serverFilter);
     if (calendarSelect != null) form.add(calendarSelect);
-    form.add(title, description, location, url, start, end, colourBlock, tagsField);
+    form.add(title, description, location, url, start, end, timezoneSelect,
+        colourBlock, tagsField);
     dialog.add(form);
 
     final Select<CalendarSubscription> calendarSelectFinal = calendarSelect;
@@ -265,6 +296,12 @@ public final class EventEditorDialog
       }
       if (start.getValue() != null) entry.setStart(start.getValue());
       if (end.getValue() != null) entry.setEnd(end.getValue());
+      // BUG #14: persist the user-picked timezone so the writer
+      // emits the correct TZID parameter. Empty / blank input clears.
+      String selectedTz = timezoneSelect.getValue();
+      if (selectedTz != null && !selectedTz.isBlank()) {
+        entry.setCustomProperty(EntryMapper.CUSTOM_TZID, selectedTz);
+      }
       // BUG #11: derive isAllDay from the actual datetime values
       // rather than trusting the entry's pre-edit state. The
       // dialog's DateTimePickers always carry a time component, so

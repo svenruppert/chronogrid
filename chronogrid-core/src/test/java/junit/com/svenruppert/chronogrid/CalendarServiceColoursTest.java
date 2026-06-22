@@ -178,45 +178,42 @@ class CalendarServiceColoursTest {
         "Empty subscription map must not touch the entry");
   }
 
-  // ── BUG #7: Apple-provider URI detection ──────────────────────
+  // Apple-provider URI detection (formerly BUG #7's
+  // isAppleProviderUri tests) has been migrated to
+  // ProviderRegistryTest after the chronogrid-core/provider
+  // refactor — see ProviderRegistry.forUri(...).id() coverage
+  // for the Apple/Nextcloud/Infomaniak/Generic paths.
+
+  // ── BUG #15: applyColours sets the readable text colour ──────
 
   @Test
-  @DisplayName("isAppleProviderUri recognises every observed iCloud URL pattern")
-  void appleProviderRecognised() {
-    assertTrue(CalendarService.isAppleProviderUri(
-        URI.create("https://caldav.icloud.com/")),
-        "caldav.icloud.com is Apple's discovery entry-point");
-    assertTrue(CalendarService.isAppleProviderUri(
-        URI.create("https://p124-caldav.icloud.com:443/270995419/calendars/CAL/")),
-        "Per-pod caldav hosts (p124-, p-prod-, …) are Apple too");
-    assertTrue(CalendarService.isAppleProviderUri(
-        URI.create("https://p-prod-caldav.icloud.com/foo/")),
-        "Production-pod variants must match");
-    assertTrue(CalendarService.isAppleProviderUri(
-        URI.create("https://ICLOUD.COM/")),
-        "Match is case-insensitive on hostname");
+  @DisplayName("BUG #15: dark calendar colour → applyColours sets white text")
+  void textColourWhiteOnDarkCalendar() {
+    Entry entry = new Entry();
+    CalendarService.applyColours(entry, "#1f77b4");  // ChronoGrid default dark blue
+    assertEquals("#ffffff", entry.getTextColor(),
+        "Dark backgrounds keep white text (FullCalendar default)");
   }
 
   @Test
-  @DisplayName("isAppleProviderUri rejects every non-Apple CalDAV URL")
-  void nonAppleProvidersIgnored() {
-    assertFalse(CalendarService.isAppleProviderUri(
-        URI.create("https://nx93157.your-storageshare.de/remote.php/dav/calendars/foo/")),
-        "Nextcloud must NOT match — it preserves RFC-7986 COLOR");
-    assertFalse(CalendarService.isAppleProviderUri(
-        URI.create("https://baikal.example.com/cal/")));
-    assertFalse(CalendarService.isAppleProviderUri(
-        URI.create("https://google.com/calendar/")),
-        "Other big providers must not be misidentified");
-    assertFalse(CalendarService.isAppleProviderUri(
-        URI.create("https://my-icloud-mirror.example.com/")),
-        "Hosts that only LOOK like icloud must not match (suffix check, not substring)");
+  @DisplayName("BUG #15: pale per-event colour → applyColours sets black text")
+  void textColourBlackOnPalePerEventColour() {
+    Entry entry = new Entry();
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#ffffe0");  // lightyellow
+    CalendarService.applyColours(entry, CALENDAR_COLOR);
+    assertEquals("#000000", entry.getTextColor(),
+        "Pale fill must get black text — that's the BUG #15 fix");
   }
 
   @Test
-  @DisplayName("isAppleProviderUri tolerates null / hostless URIs")
-  void appleProviderEdgeCases() {
-    assertFalse(CalendarService.isAppleProviderUri(null));
-    assertFalse(CalendarService.isAppleProviderUri(URI.create("/relative/path")));
+  @DisplayName("BUG #15: text colour follows the effective background (per-event when present)")
+  void textColourFollowsEffectiveBackground() {
+    Entry entry = new Entry();
+    // Calendar colour is dark, individual colour is pale.
+    // Effective fill = pale → text must be black.
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#ffff88");
+    CalendarService.applyColours(entry, "#000080");
+    assertEquals("#000000", entry.getTextColor(),
+        "Text reads from the visible fill (= individual), not the border (= calendar)");
   }
 }

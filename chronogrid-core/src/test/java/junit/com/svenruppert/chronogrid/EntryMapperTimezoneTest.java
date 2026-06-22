@@ -108,16 +108,24 @@ class EntryMapperTimezoneTest {
   }
 
   @Test
-  @DisplayName("write: no TZID → behaves as plain UTC, like before")
-  void noTzidWritesPlainUtc() {
+  @DisplayName("BUG #14: timed event without explicit TZID gets the provider's defaultTimezone()")
+  void noTzidFallsBackToProviderDefault() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("plain-utc");
     entry.setTitle("Plain");
     entry.setStart(LocalDateTime.of(2026, Month.JULY, 20, 14, 0));
     entry.setEnd(LocalDateTime.of(2026, Month.JULY, 20, 15, 0));
+    entry.setAllDay(false);
 
+    // Pre-#14 the writer emitted plain UTC (no TZID) when
+    // CUSTOM_TZID was missing — cross-timezone sharing then broke.
+    // #14 makes the writer always emit a TZID for timed events
+    // via the provider's defaultTimezone() hook. Single-arg
+    // overload uses AppleProvider whose default is the system
+    // timezone — so just assert SOME TZID appears, not its value.
     String written = mapper.toICalendarText(entry);
-    assertTrue(!written.contains("TZID="),
-        "no caldavTzid → no TZID parameter in output");
+    assertTrue(written.contains("TZID="),
+        "BUG #14: timed events must always carry a TZID even when "
+            + "CUSTOM_TZID isn't set on the entry; got:\n" + written);
   }
 }

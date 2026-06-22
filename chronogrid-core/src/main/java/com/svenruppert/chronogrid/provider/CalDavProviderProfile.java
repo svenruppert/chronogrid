@@ -101,4 +101,17 @@ public interface CalDavProviderProfile {
    * its own UI.
    */
   boolean writeDescriptionMarker();
+
+  /**
+   * BUG #14 hook: provides a per-provider hint for which timezone
+   * to emit on new events when the user hasn't picked one
+   * explicitly. The default is the JVM's
+   * {@link java.time.ZoneId#systemDefault()} which preserves the
+   * pre-#14 behaviour. Providers can override if a server is
+   * known to reject unfamiliar TZIDs or expects a specific
+   * canonical form (e.g. iCloud's preference for Olson IDs).
+   */
+  default java.time.ZoneId defaultTimezone() {
+    return java.time.ZoneId.systemDefault();
+  }
 }
