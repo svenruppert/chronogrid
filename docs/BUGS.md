@@ -36,11 +36,11 @@ Tabelle parallel aktualisieren**.
 | #3 | Datumsselektor friert bei Klick auf Tag mit Farbbalken ein | ✅ behoben | `e4302f4` |
 | #4 | Multi-Kalender + Reload: alle Termine verschwinden | ✅ behoben | `d0abe01` |
 | #5 | Per-Event-Farbe nicht sichtbar bei timed Events | ✅ behoben (iCloud-verifiziert; Nextcloud-Roundtrip → #12) | `d25e377` |
-| #6 | Verbindungsmanagement-UX ungenügend | 🟡 erfasst — UX, evtl. besser als Feature-Planning-Eintrag | — |
+| #6 | Verbindungsmanagement-UX ungenügend | ⚫ verworfen — migriert nach [Feature-Planning #7](Feature-Planning.md) (Connection-Manager UX-Refactor) | 2026-06-22 |
 | #7 | DESCRIPTION-Marker nur bei iCloud, COLOR bei anderen | ✅ behoben | `d25e377` |
-| #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | 🟡 erfasst — eng verwandt mit #6, evtl. zusammenfassen | — |
-| #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
-| #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
+| #8 | Abonnieren/De-Abonnieren von Kalendern muss einfacher werden | ⚫ verworfen — migriert nach [Feature-Planning #7](Feature-Planning.md) (Connection-Manager UX-Refactor) | 2026-06-22 |
+| #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | ⚫ verworfen — migriert nach [Feature-Planning #7](Feature-Planning.md) (Connection-Manager UX-Refactor) | 2026-06-22 |
+| #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | ⚫ verworfen — migriert nach [Feature-Planning #8](Feature-Planning.md) (Parallel/Async-Fetch) | 2026-06-22 |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | ✅ behoben | `968038d` |
 | #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben | `40a9b7b` + `f28d694` + `c12bb38` |
 | #13 | Infomaniak-Web-UI zeigt Per-Event-Farbe nicht (Provider-UI-Limitation) | ⚫ verworfen — Daten korrekt, Provider-Feature-Lücke | — |
@@ -863,7 +863,12 @@ Add-on inspizieren (M, 30–60 min).
 > intuitiv sein eine neue Verbindung herzustellen und eine zu
 > entfernen.
 
-**Status:** 🟡 erfasst — UX-Anforderung, braucht Konkretisierung
+**Status:** ⚫ verworfen 2026-06-22 — kein Bug, sondern eine
+User-Story-getriebene UX-Überarbeitung. Migriert zusammen mit BUG #8
+und BUG #9 in [`Feature-Planning.md`](Feature-Planning.md) #7
+„Connection-Manager UX-Refactor". Die hier dokumentierte Analyse
+bleibt als historischer Record erhalten; die laufende Spezifikation
+und Implementierung leben jetzt im Feature-Workflow weiter.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -1132,7 +1137,11 @@ Geschätzt 30 Minuten.
 > **Original:** Abbonieren und De-Abbonieren muss für den User
 > einfach machbar sein.
 
-**Status:** 🟡 erfasst — UX-Anforderung, eng verwandt mit BUG #6
+**Status:** ⚫ verworfen 2026-06-22 — kein Bug, sondern Teil der
+selben UX-Story wie BUG #6. Migriert zusammen mit BUG #6 und BUG #9
+in [`Feature-Planning.md`](Feature-Planning.md) #7
+„Connection-Manager UX-Refactor". Die hier dokumentierte Analyse
+bleibt als historischer Record erhalten.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -1242,7 +1251,12 @@ das Feature im normalen Feature-Workflow durch.
 > **Original:** Die Notifikationen passen nicht mehr zu einem
 > Mehr-Verbindungskonzept.
 
-**Status:** 🔬 analysiert
+**Status:** ⚫ verworfen 2026-06-22 — kein eigenständiger Bug,
+sondern Teil der Multi-Server-UX-Story. Migriert zusammen mit BUG
+#6 und BUG #8 in [`Feature-Planning.md`](Feature-Planning.md) #7
+„Connection-Manager UX-Refactor" (Punkt „Status-aware
+Notifications"). Die hier dokumentierte Analyse bleibt als
+historischer Record erhalten.
 **Filed:** 2026-06-21
 
 ### Analyse
@@ -1335,7 +1349,12 @@ Story, kein isolierter Bug.
 > Verbindungen sollte parallel und asynchron gehen.
 > Fortschrittsbalken sind notwendig.
 
-**Status:** 🔬 analysiert
+**Status:** ⚫ verworfen 2026-06-22 — kein Bug, sondern eine
+echte Architektur-Erweiterung. Migriert nach
+[`Feature-Planning.md`](Feature-Planning.md) #8 „Parallel/Async-
+Fetch über mehrere Verbindungen + Fortschrittsbalken". Die hier
+dokumentierte Analyse + Architektur-Skizze bleibt als historischer
+Record erhalten.
 **Filed:** 2026-06-21
 
 ### Analyse
