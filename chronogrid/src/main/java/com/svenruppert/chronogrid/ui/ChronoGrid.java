@@ -37,13 +37,10 @@ import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.VaadinIcon;
 import com.vaadin.flow.component.notification.Notification;
-import com.vaadin.flow.component.checkbox.CheckboxGroup;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.FlexComponent;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.component.textfield.PasswordField;
-import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.shared.Registration;
 import org.vaadin.stefan.fullcalendar.CalendarViewImpl;
 import org.vaadin.stefan.fullcalendar.CustomCalendarView;
@@ -145,11 +142,8 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_NOTIFY_CONFLICT = "calendar.notify.conflict";
   // toolbar / settings
   private static final String K_TB_BACKEND = "calendar.toolbar.backend";
-  private static final String K_TB_SETTINGS = "calendar.toolbar.settings";
   private static final String K_TB_REFRESH = "calendar.toolbar.refresh";
   private static final String K_TB_NEW = "calendar.toolbar.newEvent";
-  private static final String K_TB_SUBSCRIPTIONS = "calendar.toolbar.subscriptions";
-  private static final String K_TB_CONNECTIONS = "calendar.toolbar.connections";
   private static final String K_TB_TAG_FILTER = "calendar.toolbar.tagFilter";
   private static final String K_TB_TAG_FILTER_PLACEHOLDER = "calendar.toolbar.tagFilter.placeholder";
   private static final String K_TB_MANAGER = "calendar.toolbar.manager";
@@ -162,17 +156,14 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_NOTIFY_SUB_REMOVED = "calendar.notify.subscription.removed";
   private static final String K_NOTIFY_SUB_HIDDEN = "calendar.notify.subscription.hidden";
   private static final String K_NOTIFY_SUB_SHOWN = "calendar.notify.subscription.shown";
-  private static final String K_SET_TITLE = "calendar.settings.title";
-  private static final String K_SET_URI = "calendar.settings.uri";
-  private static final String K_SET_USER = "calendar.settings.username";
-  private static final String K_SET_PASS = "calendar.settings.password";
-  private static final String K_SET_TEST = "calendar.settings.test";
-  private static final String K_SET_DISCOVER = "calendar.settings.discover";
-  private static final String K_SET_PICKER_LABEL = "calendar.settings.picker.label";
-  private static final String K_SET_PICKER_PLACEHOLDER = "calendar.settings.picker.placeholder";
-  private static final String K_SET_HINT = "calendar.settings.hint";
-  private static final String K_SET_PRESETS_LABEL = "calendar.settings.presets.label";
-  private static final String K_PROVIDER_PREFIX = "calendar.settings.provider.";  // + id + .label / .hint
+  // Note: the K_SET_* / K_PROVIDER_PREFIX constants and the legacy
+  // K_TB_SETTINGS/K_TB_CONNECTIONS/K_TB_SUBSCRIPTIONS toolbar keys
+  // are gone with Schicht 3b. The Connection Manager + Wizard own
+  // their own i18n key namespace (calendar.manager.*, calendar.wizard.*).
+  // The CalDavProviderPreset id is consumed by ConnectionWizardDialog
+  // directly — that's the single remaining consumer of the legacy
+  // calendar.settings.provider.<id>.* bundle keys; they live there
+  // unchanged for backward compatibility of those keys.
   private static final String K_NOTIFY_BAD_URI = "calendar.notify.badUri";
   private static final String K_NOTIFY_TEST_OK = "calendar.notify.testOk";
   private static final String K_NOTIFY_TEST_FAIL = "calendar.notify.testFail";
@@ -420,28 +411,14 @@ public class ChronoGrid extends Composite<VerticalLayout>
     status.setAlignItems(FlexComponent.Alignment.CENTER);
     status.setSpacing(true);
 
-    Button settings = new Button(messages.tr(K_TB_SETTINGS, "Settings"),
-        VaadinIcon.COG.create(), e -> openSettingsDialog());
-    settings.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-
-    Button connections = new Button(messages.tr(K_TB_CONNECTIONS, "Connections"),
-        VaadinIcon.CONNECT.create(), e -> openConnectionsDialog());
-    connections.setId("calendar-toolbar-connections");
-    connections.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-
-    // Planning-Feature #7 Schicht 3: the Connection Manager replaces
-    // Settings + Connections + Subscriptions. Coexists with the
-    // three legacy buttons during this transition Schicht — Schicht
-    // 3b deletes them.
+    // Planning-Feature #7 Schicht 3b: the Connection Manager fully
+    // replaces the three legacy toolbar buttons (Settings, Connections,
+    // Subscriptions). Their methods + dialog classes are gone — what's
+    // left is one entry point that does the full add/edit/remove flow.
     Button manager = new Button(messages.tr(K_TB_MANAGER, "Connection Manager"),
         VaadinIcon.SERVER.create(), e -> openConnectionManagerDialog());
     manager.setId("calendar-toolbar-manager");
     manager.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-
-    Button subscriptions = new Button(messages.tr(K_TB_SUBSCRIPTIONS, "Subscriptions"),
-        VaadinIcon.LAYOUT.create(), e -> openSubscriptionsDialog());
-    subscriptions.setId("calendar-toolbar-subscriptions");
-    subscriptions.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
 
     Button refresh = new Button(messages.tr(K_TB_REFRESH, "Refresh"),
         VaadinIcon.REFRESH.create(), e -> {
@@ -485,8 +462,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
     Button visibilityToggle = buildVisibilityToggle();
 
     HorizontalLayout actions = new HorizontalLayout(
-        tagFilter, settings, connections, manager, visibilityToggle,
-        subscriptions, refresh, newEvent);
+        tagFilter, manager, visibilityToggle, refresh, newEvent);
     actions.setAlignItems(FlexComponent.Alignment.END);
     actions.setSpacing(true);
 
@@ -1116,156 +1092,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   // ── settings dialog ────────────────────────────────────────────
 
-  Dialog openSettingsDialog() {
-    Dialog dialog = new Dialog();
-    dialog.setHeaderTitle(messages.tr(K_SET_TITLE, "CalDAV server settings"));
-    dialog.setWidth("520px");
-
-    CalDavConnectionConfig current = currentConfig();
-
-    TextField uri = new TextField(messages.tr(K_SET_URI, "Collection URI"));
-    uri.setValue(current.collectionUri().toString());
-    uri.setWidthFull();
-    uri.setPlaceholder("http://127.0.0.1:5232/calendars/personal/");
-
-    TextField username = new TextField(messages.tr(K_SET_USER, "Username (optional)"));
-    username.setValue(current.username() == null ? "" : current.username());
-    username.setWidthFull();
-
-    PasswordField password = new PasswordField(messages.tr(K_SET_PASS, "Password (optional)"));
-    password.setValue(current.password() == null ? "" : current.password());
-    password.setWidthFull();
-
-    CheckboxGroup<DiscoveredCalendar> picker = new CheckboxGroup<>();
-    picker.setLabel(messages.tr(K_SET_PICKER_LABEL, "Discovered calendars"));
-    picker.setItemLabelGenerator(DiscoveredCalendar::displayName);
-    picker.setWidthFull();
-    picker.setVisible(false);
-    picker.addValueChangeListener(e -> {
-      java.util.Set<DiscoveredCalendar> selected = e.getValue();
-      if (selected != null && !selected.isEmpty()) {
-        DiscoveredCalendar first = selected.iterator().next();
-        uri.setValue(first.href().toString());
-      }
-    });
-
-    Button discover = new Button(messages.tr(K_SET_DISCOVER, "Discover calendars"),
-        VaadinIcon.SEARCH.create());
-    discover.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-    discover.addClickListener(e -> withBusyButton(discover,
-        () -> runDiscovery(uri.getValue(), username.getValue(),
-            password.getValue(), picker)));
-
-    String defaultHint = messages.tr(K_SET_HINT,
-        "Username + password are sent as HTTP Basic auth on every request. "
-            + "Leave blank for the local caldav-testbench. Pick a provider "
-            + "preset above for a one-click URL + provider-specific hint.");
-    Span hint = new Span(defaultHint);
-    hint.addClassName("chronogrid-secondary-text");
-
-    HorizontalLayout presets = buildPresetRow(uri, hint, defaultHint);
-
-    VerticalLayout form = new VerticalLayout(
-        presets, uri, username, password, discover, picker, hint);
-    form.setPadding(false);
-    form.setSpacing(true);
-    dialog.add(form);
-
-    Button test = new Button(messages.tr(K_SET_TEST, "Test connection"),
-        VaadinIcon.CONNECT.create());
-    test.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-    test.addClickListener(e -> withBusyButton(test,
-        () -> probeConnection(uri.getValue(),
-            username.getValue(), password.getValue())));
-
-    Button save = new Button(messages.tr(K_ACTION_SAVE, "Save"), e -> {
-      if (applyConfig(uri.getValue(), username.getValue(), password.getValue(),
-          picker.getValue())) {
-        dialog.close();
-      }
-    });
-    save.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-
-    Button cancel = new Button(messages.tr(K_ACTION_CANCEL, "Cancel"), e -> dialog.close());
-    cancel.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-
-    HorizontalLayout actions = new HorizontalLayout(test, cancel, save);
-    actions.setAlignItems(FlexComponent.Alignment.CENTER);
-    dialog.getFooter().add(actions);
-    dialog.open();
-    return dialog;
-  }
-
-  private HorizontalLayout buildPresetRow(TextField uri, Span hint,
-                                          String defaultHint) {
-    Span label = new Span(messages.tr(K_SET_PRESETS_LABEL, "Quick connect:"));
-    label.addClassName("chronogrid-secondary-text");
-
-    HorizontalLayout row = new HorizontalLayout(label);
-    row.setAlignItems(FlexComponent.Alignment.CENTER);
-    row.setSpacing(true);
-
-    for (CalDavProviderPreset preset : CalDavProviderPreset.DEFAULTS) {
-      String labelKey = K_PROVIDER_PREFIX + preset.id() + ".label";
-      String hintKey = K_PROVIDER_PREFIX + preset.id() + ".hint";
-      Button btn = new Button(messages.tr(labelKey, preset.label()),
-          preset.icon().create(),
-          e -> {
-            uri.setValue(preset.entryUri());
-            hint.setText(messages.tr(hintKey, preset.hint()));
-          });
-      btn.setId("calendar-provider-" + preset.id());
-      btn.getElement().setProperty("title",
-          messages.tr(labelKey, preset.label()));
-      btn.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
-      row.add(btn);
-    }
-    return row;
-  }
-
-  private void runDiscovery(String rawUri, String user, String pass,
-                            CheckboxGroup<DiscoveredCalendar> picker) {
-    URI startUri = parseUri(rawUri);
-    if (startUri == null) return;
-    try {
-      List<DiscoveredCalendar> found =
-          new CalDavDiscovery().discover(startUri, user, pass);
-      if (found.isEmpty()) {
-        picker.setItems(List.of());
-        picker.setVisible(false);
-        notifyError(messages.tr(K_NOTIFY_DISCOVERY_EMPTY,
-            "No calendars found at {0}", startUri.toString()));
-        return;
-      }
-      picker.setItems(found);
-      picker.setValue(java.util.Set.of(found.get(0)));
-      picker.setVisible(true);
-      notifyInfo(messages.tr(K_NOTIFY_DISCOVERY_FOUND,
-          "Found {0} calendar(s)", String.valueOf(found.size())));
-    } catch (RuntimeException ex) {
-      logger().info("Discovery against {} failed: {}", startUri, ex.toString());
-      notifyError(messages.tr(K_NOTIFY_DISCOVERY_FAIL,
-          "Discovery failed: {0}", friendlyError(ex)));
-    }
-  }
-
-  private void probeConnection(String rawUri, String user, String pass) {
-    URI parsed = parseUri(rawUri);
-    if (parsed == null) return;
-    CalDavConnectionConfig probeConfig =
-        new CalDavConnectionConfig(parsed, user, pass).normalised();
-    CalendarService probe = CalendarService.fromConfig(probeConfig, displayZone);
-    try {
-      probe.findInRange(LocalDateTime.now().minusHours(1),
-          LocalDateTime.now().plusHours(1)).count();
-      notifyInfo(messages.tr(K_NOTIFY_TEST_OK, "Connection OK"));
-    } catch (RuntimeException ex) {
-      logger().info("Probe against {} failed: {}", parsed, ex.toString());
-      notifyError(messages.tr(K_NOTIFY_TEST_FAIL,
-          "Connection failed: {0}", friendlyError(ex)));
-    }
-  }
-
   private boolean applyConfig(String rawUri, String user, String pass,
                               java.util.Set<DiscoveredCalendar> picked) {
     URI parsed = parseUri(rawUri);
@@ -1583,14 +1409,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
     return out;
   }
 
-  Dialog openConnectionsDialog() {
-    ConnectionsDialog dialog = new ConnectionsDialog(messages,
-        stateStore.readServers(), stateStore.readSubscriptions(),
-        this::openConnectionWizard);
-    dialog.open();
-    return dialog.getContent();
-  }
-
   /**
    * Planning-Feature #7 Schicht 2 — opens the {@link ConnectionWizardDialog}.
    * Wires the three injected callbacks: {@code discoveryFn} runs the
@@ -1629,16 +1447,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
         });
     wizard.open();
     return wizard.getContent();
-  }
-
-  private void openSubscriptionsDialog() {
-    SubscriptionsDialog dialog = new SubscriptionsDialog(messages,
-        stateStore.readSubscriptions(),
-        stateStore.readServers(),
-        this::toggleSubscriptionVisible,
-        this::changeSubscriptionColor,
-        this::removeSubscription);
-    dialog.open();
   }
 
   /**

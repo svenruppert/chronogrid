@@ -216,8 +216,8 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
-  @DisplayName("Connections toolbar button opens the ConnectionsDialog populated with all servers")
-  void connectionsDialogListsAllServers() throws Exception {
+  @DisplayName("Planning-Feature #7 Schicht 3b: Connection Manager surfaces all configured servers as tabs")
+  void connectionManagerListsAllServers() throws Exception {
     AppUser user = new AppUser(110L, "Conn User",
         EnumSet.of(AuthorizationRole.USER));
     SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
@@ -242,27 +242,24 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     navigate(CalendarRouteView.class);
 
     ChronoGrid view = findCalendarView();
-    java.lang.reflect.Method openConnections =
-        ChronoGrid.class.getDeclaredMethod("openConnectionsDialog");
-    openConnections.setAccessible(true);
+    java.lang.reflect.Method openManager =
+        ChronoGrid.class.getDeclaredMethod("openConnectionManagerDialog");
+    openManager.setAccessible(true);
     com.vaadin.flow.component.dialog.Dialog dialog =
-        (com.vaadin.flow.component.dialog.Dialog) openConnections.invoke(view);
+        (com.vaadin.flow.component.dialog.Dialog) openManager.invoke(view);
 
-    // The dialog hosts a Grid<CalDavServerConnection> populated from
-    // the session-stored servers. We can't reliably traverse per-row
-    // components in BrowserlessTest, so we assert the Grid's data
-    // provider size — that confirms the dialog received both server
-    // entries (and the status-pill renderer runs per row).
-    com.vaadin.flow.component.grid.Grid<?> grid = allDescendants(dialog)
-        .filter(com.vaadin.flow.component.grid.Grid.class::isInstance)
-        .map(com.vaadin.flow.component.grid.Grid.class::cast)
-        .findFirst()
-        .orElseThrow(() ->
-            new AssertionError("ConnectionsDialog must contain a Grid"));
-    int rowCount = grid.getDataProvider()
-        .size(new com.vaadin.flow.data.provider.Query<>());
-    assertEquals(2, rowCount,
-        "ConnectionsDialog Grid must list both configured servers");
+    // The Connection-Manager left pane is a vertical Tabs with one Tab
+    // per configured server. Each tab carries id
+    // "calendar-manager-server-tab-<serverId>" so the assertion can
+    // pin both entries by name.
+    java.util.Set<String> tabIds = allDescendants(dialog)
+        .filter(com.vaadin.flow.component.tabs.Tab.class::isInstance)
+        .map(c -> c.getId().orElse(""))
+        .collect(java.util.stream.Collectors.toSet());
+    assertTrue(tabIds.contains("calendar-manager-server-tab-" + live.id()),
+        "Connection Manager must show live-server tab; saw: " + tabIds);
+    assertTrue(tabIds.contains("calendar-manager-server-tab-" + dead.id()),
+        "Connection Manager must show offline-server tab; saw: " + tabIds);
   }
 
   @Test
@@ -301,7 +298,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
-  @DisplayName("Subscriptions toolbar button + session-list flip Visible flag + remove URI")
+  @DisplayName("Subscriptions seeded on the session surface via readSubscriptions and start visible")
   void subscriptionsRoundTrip() {
     AppUser user = new AppUser(90L, "Sub User",
         EnumSet.of(AuthorizationRole.USER));
@@ -317,13 +314,11 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
 
     navigate(CalendarRouteView.class);
 
-    boolean sawButton = allDescendants(com.vaadin.flow.component.UI.getCurrent())
-        .filter(Button.class::isInstance)
-        .map(Button.class::cast)
-        .anyMatch(b -> "calendar-toolbar-subscriptions"
-            .equals(b.getId().orElse(null)));
-    assertTrue(sawButton, "toolbar must carry the Subscriptions button");
-
+    // The legacy "Subscriptions" toolbar button is gone with Schicht 3b;
+    // the visibility-toggle dropdown and the Connection-Manager carry
+    // the responsibility now. What we still verify here: the session-
+    // seeded subscriptions survive the round-trip through the
+    // ChronoGrid mount.
     assertEquals(2, ChronoGrid.readSubscriptions().size(),
         "two subscriptions must be stored");
     assertTrue(ChronoGrid.readSubscriptions().stream()
@@ -490,31 +485,13 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
         .HYBRID_DEFAULT_VISIBILITY_THRESHOLD);
   }
 
-  @Test
-  @DisplayName("Settings dialog exposes the iCloud quick-connect preset button")
-  void settingsDialogCarriesIcloudPreset() throws Exception {
-    AppUser user = new AppUser(80L, "Preset User",
-        EnumSet.of(AuthorizationRole.USER));
-    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
-
-    navigate(CalendarRouteView.class);
-    ChronoGrid view = findCalendarView();
-    java.lang.reflect.Method openSettings =
-        ChronoGrid.class.getDeclaredMethod("openSettingsDialog");
-    openSettings.setAccessible(true);
-    com.vaadin.flow.component.dialog.Dialog dialog =
-        (com.vaadin.flow.component.dialog.Dialog) openSettings.invoke(view);
-
-    boolean sawIcloud = allDescendants(dialog)
-        .filter(Button.class::isInstance)
-        .map(Button.class::cast)
-        .anyMatch(b -> "calendar-provider-icloud".equals(b.getId().orElse(null)));
-    assertTrue(sawIcloud,
-        "Settings dialog must expose a button with id 'calendar-provider-icloud'");
-  }
+  // settingsDialogCarriesIcloudPreset removed with Schicht 3b — the
+  // Settings dialog is gone, the iCloud preset now lives in the
+  // ConnectionWizardDialog (covered by connectionWizardDialogStructure
+  // which asserts the id 'calendar-wizard-preset-icloud').
 
   @Test
-  @DisplayName("toolbar carries Settings + Refresh + New event buttons")
+  @DisplayName("toolbar carries Connection-Manager + Refresh + New event buttons (Schicht 3b)")
   void toolbarButtonsArePresent() {
     AppUser user = new AppUser(60L, "Cal User",
         EnumSet.of(AuthorizationRole.USER));
@@ -527,8 +504,10 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
         .map(Button.class::cast)
         .map(Button::getText)
         .collect(Collectors.toList());
-    assertTrue(buttonLabels.contains("Settings"),
-        "toolbar must contain a Settings button — saw " + buttonLabels);
+    // Schicht 3b: Settings / Connections / Subscriptions are gone.
+    // The Connection-Manager button replaces all three.
+    assertTrue(buttonLabels.contains("Connection Manager"),
+        "toolbar must contain a Connection-Manager button — saw " + buttonLabels);
     assertTrue(buttonLabels.contains("Refresh"),
         "toolbar must contain a Refresh button — saw " + buttonLabels);
     assertTrue(buttonLabels.contains("New event"),
