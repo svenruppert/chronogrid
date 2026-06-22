@@ -42,7 +42,7 @@ Tabelle parallel aktualisieren**.
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
-| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex-Normalisierung | 🔧 in Arbeit — Reader-Fix für CSS named tokens committet, Save-Pfad noch offen | (pending commit) |
+| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex-Normalisierung + UI-Refresh + Writer Hex→Named | 🧪 fertig, Tests laufen — wartet auf 3. Smoke-Test | (pending commit) |
 
 ---
 
@@ -1633,7 +1633,7 @@ Browser-Smoke-Test. Geschätzt 30 Minuten.
 > wird, „verliert der Termin wieder seine Farbe, bzw. kommt
 > wohl nicht in Nextcloud an".
 
-**Status:** 🔧 in Arbeit — Diagnose abgeschlossen, Teil-Fix für Reader (Hex-Normalisierung) committet; Save-Pfad noch offen
+**Status:** 🧪 fertig, Tests laufen — wartet auf Browser-Smoke-Test (drei Teile: Reader-Hex-Normalisierung + UI-Refresh + Writer Hex→Named für Nextcloud)
 **Filed:** 2026-06-21 (Erweiterung + Diagnose 2026-06-22)
 
 ### 2026-06-22 Diagnose-Update
@@ -1699,6 +1699,91 @@ Sven muss verifizieren ob nach diesem Fix:
 
 Wenn (1) klappt aber (2) nicht: liegt ein eigenständiger Save-
 Bug vor, dann zurück zur Diagnose.
+
+### 2026-06-22 Folge-Diagnose nach Sven's Save-Test
+
+**Sven's Beobachtungen:** Reader-Fix funktioniert ✓. Aber drei
+neue Symptome aufgetaucht:
+1. Nach App-side Save: manueller Reload nötig damit die Farbe
+   im Grid sichtbar ist.
+2. Farbe „kommt nicht in Nextcloud an" — UI zeigt sie nicht.
+3. Nextcloud→App-Read funktioniert weiter.
+
+**Diagnose-Logger** im PUT-Pfad (CalDavClient) + Read-Pfad
+(EntryMapper) eingebaut. Sven hat die Logs geliefert:
+
+```
+[BUG#12 DIAG] PUT(update) → color-line=COLOR:#f08ee8 → HTTP 204
+[BUG#12 DIAG READ] uid=... rawColor='#f08ee8' stored=#f08ee8
+```
+
+**Was die Daten zeigen:**
+- Unser App schreibt `COLOR:#f08ee8` korrekt durch (Hex, kein
+  Strip in unserem Code).
+- Nextcloud akzeptiert mit HTTP 204 und persistiert den Wert.
+- Beim nächsten REPORT kommt `#f08ee8` 1:1 zurück. Roundtrip
+  in unserer App funktioniert.
+
+**Ergänzende Diagnose von Sven:** Nextcloud hat einen
+„Custom-Farbpicker" der Hex akzeptiert, **aber** Nextcloud's UI
+rendert die Farbe NUR wenn die `COLOR:`-Property eine
+**CSS named token** enthält (wie `olive`, `red`). Arbiträre
+Hex-Werte werden im iCal-Body korrekt persistiert, aber in
+Nextcloud's UI als „keine Farbe" dargestellt.
+
+Beweis im iCal-Export den Sven geliefert hat:
+
+```
+COLOR:olive   ← user picked #808000 in Nextcloud's Custom-Picker
+                 → Nextcloud konvertiert exakte Matches zu named
+```
+
+### Drei-teiliger Fix (commit `<COMMIT>`)
+
+**Teil 1 (Reader-Hex-Normalisierung):** schon im ersten Anlauf
+implementiert über `CssColorNames.toHex`. EntryMapper.toEntry
+normalisiert `darkkhaki` → `#bdb76b` damit der HTML5-Picker
+den Wert anzeigen kann.
+
+**Teil 2 (UI-Refresh):** `persistSave` ruft jetzt
+`refreshAll()` statt `refreshItem(persisted)`. FullCalendar v6's
+`refreshItem` pickt die geänderten Background/Border-CSS-
+Variablen nicht zuverlässig auf bei Farb-Updates; refreshAll
+ist robust und für die typischen Wochen-/Monatsranges nicht
+spürbar teurer.
+
+**Teil 3 (Writer Hex→Named für Nextcloud):** neue
+`CssColorNames.toName(hex)`-Reverse-Lookup,
+`EntryMapper.toICalendarText` bekommt einen
+`preferNamedColors`-Parameter, `CalendarService.save` setzt
+ihn auf `!isAppleProviderUri(target)`. Folge:
+
+- Apple-Targets: weiter Hex (was bei iCloud-Pfaden mit
+  BUG #2-DESCRIPTION-Marker auch nötig ist; iCloud's eigene UI
+  zeigt sowieso keine Per-Event-Farbe).
+- Non-Apple-Targets (Nextcloud + alle anderen): bei exaktem
+  Hex→Named-Match wird die named-Form geschrieben, was
+  Nextcloud's UI dann korrekt rendert. Falls kein exakter
+  Match (z.B. arbiträres `#f08ee8`): Hex pass-through.
+
+Round-trip-Konsistenz: User wählt `#808000` in unserer App →
+wir schreiben `COLOR:olive` an Nextcloud → Nextcloud's UI zeigt
+olive → CalDAV-Read holt `olive` → CssColorNames.toHex
+normalisiert zu `#808000` → unser Picker zeigt korrekt
+`#808000`. Symmetrisch.
+
+### Was noch offen ist (3. Smoke-Test)
+
+Sven muss verifizieren ob:
+- (a) Nach App-side Save erscheint die neue Farbe DIREKT im
+  Grid (kein manueller Reload mehr nötig).
+- (b) Beim Schreiben eines Hex-Werts der einer CSS named color
+  entspricht (z.B. `#808000` = olive) zeigt Nextcloud's UI die
+  Farbe.
+- (c) Beim Schreiben eines arbiträren Hex-Werts (z.B. `#f08ee8`)
+  bleibt der Wert im Grid sichtbar (Nextcloud's UI rendert
+  nichts, was OK ist — wir können nicht mehr machen ohne
+  Präzisionsverlust per nearest-match).
 
 ### Analyse
 

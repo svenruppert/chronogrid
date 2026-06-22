@@ -376,7 +376,17 @@ public final class EntryMapper {
     // Backward-compatible default: emit the DESCRIPTION sidechannel
     // marker. Apple-safe by default (no harm if the provider isn't
     // Apple — the marker is just a discreet text line in the notes).
-    return toICalendarText(entry, true);
+    return toICalendarText(entry, true, false);
+  }
+
+  /**
+   * Two-arg overload kept for callers that haven't migrated to the
+   * three-arg form yet. Defaults {@code preferNamedColors} to
+   * {@code false} (= write hex), which matches the pre-BUG #12
+   * behaviour.
+   */
+  public String toICalendarText(Entry entry, boolean appleSidechannel) {
+    return toICalendarText(entry, appleSidechannel, false);
   }
 
   /**
@@ -393,7 +403,8 @@ public final class EntryMapper {
    * legacy entry written with the marker still reads correctly
    * after the producer switches it off.
    */
-  public String toICalendarText(Entry entry, boolean appleSidechannel) {
+  public String toICalendarText(Entry entry, boolean appleSidechannel,
+                                boolean preferNamedColors) {
     VEvent vevent = new VEvent();
     String uid = entry.getId() != null ? entry.getId() : UUID.randomUUID().toString();
     vevent.setUid(uid);
@@ -422,7 +433,18 @@ public final class EntryMapper {
       // provider AND by iCloud as long as the event isn't touched
       // in iCloud's own UI. The DESCRIPTION marker above is the
       // safety net for the latter case.
-      vevent.setColor(entryColor);
+      //
+      // BUG #12: when preferNamedColors is set (= non-Apple target,
+      // typically Nextcloud), look up a canonical CSS3 named
+      // equivalent for the hex value and write that instead. Nextcloud's
+      // UI only renders colour pills when COLOR carries a named
+      // token; arbitrary hex values become invisible in its UI
+      // even though they persist correctly through CalDAV. Falls
+      // back to the original hex when no named equivalent exists.
+      String colourToWrite = preferNamedColors
+          ? CssColorNames.toName(entryColor).orElse(entryColor)
+          : entryColor;
+      vevent.setColor(colourToWrite);
     }
 
     writeCategories(vevent, entry.getCustomProperty(CUSTOM_CATEGORIES));

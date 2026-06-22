@@ -316,10 +316,18 @@ public final class CalendarService implements HasLogger {
     // ONLY when the target is an Apple/iCloud provider. Other
     // providers preserve RFC-7986 COLOR through user-edit-rewrite,
     // so the marker would show up as visible noise in their UI.
-    boolean appleSidechannel = isAppleProviderUri(target);
+    //
+    // BUG #12 part-2: non-Apple providers (Nextcloud in particular)
+    // only render colour pills in their UI when COLOR carries a
+    // CSS3 named token, not arbitrary hex. Prefer named colours
+    // for non-Apple targets when a canonical equivalent exists;
+    // fall back to hex when not. Apple targets keep hex because
+    // iCloud's own UI doesn't show per-event colours anyway and
+    // hex preserves precision for the DESCRIPTION-marker fallback.
+    boolean apple = isAppleProviderUri(target);
     String body = EntryMapper.isTodo(entry)
         ? mapper.toICalendarTodoText(entry)
-        : mapper.toICalendarText(entry, appleSidechannel);
+        : mapper.toICalendarText(entry, apple, !apple);
 
     String newEtag = EntryMapper.readEtag(entry)
         .map(etag -> targetClient.putUpdate(target, body, etag))

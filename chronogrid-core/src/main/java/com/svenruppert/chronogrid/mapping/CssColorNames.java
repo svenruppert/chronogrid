@@ -58,6 +58,37 @@ public final class CssColorNames {
     return CSS3.getOrDefault(key, raw);
   }
 
+  /**
+   * Reverse lookup: returns the canonical CSS3 named token for an
+   * EXACT hex match (case-insensitive), or {@link java.util.Optional#empty()}
+   * when the input is null/blank/non-hex or has no named equivalent.
+   *
+   * <p>BUG #12 background: Nextcloud's web UI only renders the
+   * per-event colour when {@code COLOR:} carries a named token —
+   * arbitrary hex values become invisible in its UI even though
+   * the value persists correctly through CalDAV. Writing exact
+   * matches as named tokens (e.g. {@code #808000} → {@code olive})
+   * keeps Nextcloud-UI users happy without losing precision.
+   *
+   * <p>Where multiple named tokens map to the same hex (e.g.
+   * {@code aqua} == {@code cyan}, {@code gray} == {@code grey}),
+   * the result is the first-occurring entry in the canonical
+   * CSS3 table. Deterministic for our use, irrelevant for the
+   * renderer.
+   */
+  public static java.util.Optional<String> toName(String hex) {
+    if (hex == null) return java.util.Optional.empty();
+    String trimmed = hex.trim();
+    if (trimmed.length() != 7 || trimmed.charAt(0) != '#') {
+      return java.util.Optional.empty();
+    }
+    String lower = trimmed.toLowerCase(Locale.ROOT);
+    for (Map.Entry<String, String> e : CSS3.entrySet()) {
+      if (e.getValue().equals(lower)) return java.util.Optional.of(e.getKey());
+    }
+    return java.util.Optional.empty();
+  }
+
   private static final Map<String, String> CSS3 = Map.ofEntries(
       Map.entry("aliceblue", "#f0f8ff"),
       Map.entry("antiquewhite", "#faebd7"),

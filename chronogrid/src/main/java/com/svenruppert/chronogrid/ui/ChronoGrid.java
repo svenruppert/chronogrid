@@ -1177,11 +1177,15 @@ public class ChronoGrid extends Composite<VerticalLayout>
       } else {
         stateStore.clearEntryColour(persisted.getId());
       }
-      if (isNew) {
-        calendar.getEntryProvider().refreshAll();
-      } else {
-        calendar.getEntryProvider().refreshItem(persisted);
-      }
+      // BUG #12 part-2: refreshItem(persisted) was not picking up
+      // colour changes reliably in FullCalendar v6 — Sven reported
+      // "wenn ich die Farbe eines Events geändert habe, dann muss
+      // ich einen reload machen damit die dann angezeigt wird".
+      // Switch to refreshAll() for every save: slightly heavier
+      // but guaranteed to repaint the entry's background/border
+      // CSS variables. The render pipeline isn't expensive for
+      // typical week/month ranges.
+      calendar.getEntryProvider().refreshAll();
     } catch (ConcurrentModificationException cme) {
       markConnected();
       logger().info("Conflict saving entry {} — reloading", entry.getId());

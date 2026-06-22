@@ -110,6 +110,101 @@ class CssColorNamesTest {
         "Nextcloud's `darkkhaki` must arrive as hex so the colour picker can render it");
   }
 
+  // ── Reverse lookup (BUG #12 part-2) ──────────────────────────
+
+  @Test
+  @DisplayName("CssColorNames.toName returns the canonical CSS3 token for known hex values")
+  void reverseLookupCanonical() {
+    assertEquals("olive", CssColorNames.toName("#808000").orElseThrow(),
+        "Sven's reproduction: #808000 → olive (matches the Nextcloud export)");
+    assertEquals("red", CssColorNames.toName("#ff0000").orElseThrow());
+    assertEquals("black", CssColorNames.toName("#000000").orElseThrow());
+    assertEquals("white", CssColorNames.toName("#ffffff").orElseThrow());
+  }
+
+  @Test
+  @DisplayName("CssColorNames.toName is case-insensitive on the hex digits")
+  void reverseLookupCaseInsensitive() {
+    assertEquals("red", CssColorNames.toName("#FF0000").orElseThrow());
+    assertEquals("red", CssColorNames.toName("#fF0000").orElseThrow());
+  }
+
+  @Test
+  @DisplayName("CssColorNames.toName returns empty for arbitrary hex without a named match")
+  void reverseLookupArbitraryHex() {
+    org.junit.jupiter.api.Assertions.assertTrue(
+        CssColorNames.toName("#f08ee8").isEmpty(),
+        "Arbitrary hex from Sven's BUG #12 PUT diagnostic must not match anything");
+    org.junit.jupiter.api.Assertions.assertTrue(
+        CssColorNames.toName("#123456").isEmpty());
+  }
+
+  @Test
+  @DisplayName("CssColorNames.toName rejects non-hex inputs")
+  void reverseLookupInvalidInputs() {
+    org.junit.jupiter.api.Assertions.assertTrue(CssColorNames.toName(null).isEmpty());
+    org.junit.jupiter.api.Assertions.assertTrue(CssColorNames.toName("").isEmpty());
+    org.junit.jupiter.api.Assertions.assertTrue(CssColorNames.toName("red").isEmpty(),
+        "Named token in must NOT round-trip as 'red' — we only accept 7-char hex");
+    org.junit.jupiter.api.Assertions.assertTrue(CssColorNames.toName("#abc").isEmpty(),
+        "3-char short hex not supported (matches CSS3 list which is all 7-char)");
+  }
+
+  @Test
+  @DisplayName("EntryMapper writes a named token to non-Apple targets when an exact match exists")
+  void writeNamedForNextcloudOnExactMatch() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("nextcloud-uid");
+    entry.setTitle("Olive event");
+    entry.setStart(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 8, 0));
+    entry.setEnd(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 13, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#808000");
+
+    // preferNamedColors=true → Nextcloud-target write
+    String body = mapper.toICalendarText(entry, false, true);
+
+    org.junit.jupiter.api.Assertions.assertTrue(body.contains("COLOR:olive"),
+        "Exact hex matches must be written as canonical named tokens so "
+            + "Nextcloud's UI renders them; got:\n" + body);
+    org.junit.jupiter.api.Assertions.assertFalse(body.contains("COLOR:#808000"),
+        "Hex form must NOT appear when a named equivalent exists.");
+  }
+
+  @Test
+  @DisplayName("EntryMapper keeps hex when preferNamedColors=true but no named equivalent exists")
+  void writeFallsBackToHexWhenNoNamedMatch() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("arbitrary-uid");
+    entry.setTitle("Arbitrary hex");
+    entry.setStart(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 8, 0));
+    entry.setEnd(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 13, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#f08ee8");
+
+    String body = mapper.toICalendarText(entry, false, true);
+
+    org.junit.jupiter.api.Assertions.assertTrue(body.contains("COLOR:#f08ee8"),
+        "Arbitrary hex must pass through when no named equivalent exists — "
+            + "we don't lose precision via 'nearest-match' guessing.");
+  }
+
+  @Test
+  @DisplayName("EntryMapper keeps hex when preferNamedColors=false (= Apple target)")
+  void writeKeepsHexForApple() {
+    EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
+    Entry entry = new Entry("apple-uid");
+    entry.setTitle("Apple target");
+    entry.setStart(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 8, 0));
+    entry.setEnd(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 13, 0));
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#808000");
+
+    // appleSidechannel=true, preferNamedColors=false → Apple target
+    String body = mapper.toICalendarText(entry, true, false);
+
+    org.junit.jupiter.api.Assertions.assertTrue(body.contains("COLOR:#808000"),
+        "Apple target keeps hex (matches the BUG #2 DESCRIPTION-marker "
+            + "round-trip semantics and respects user precision); got:\n" + body);
+  }
+
   @Test
   @DisplayName("EntryMapper.toEntry preserves hex COLOR (no double-conversion)")
   void entryMapperPreservesHexOnRead() {
