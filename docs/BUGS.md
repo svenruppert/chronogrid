@@ -42,7 +42,7 @@ Tabelle parallel aktualisieren**.
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
-| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben (arbiträre Hex snappen zum nearest named) | `40a9b7b` + `f28d694` + (pending commit) |
+| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben | `40a9b7b` + `f28d694` + `c12bb38` |
 
 ---
 
@@ -1633,7 +1633,7 @@ Browser-Smoke-Test. Geschätzt 30 Minuten.
 > wird, „verliert der Termin wieder seine Farbe, bzw. kommt
 > wohl nicht in Nextcloud an".
 
-**Status:** ✅ behoben 2026-06-22 in `40a9b7b` (Reader-Hex-Normalisierung) + `f28d694` (UI-Refresh + Writer Hex→Named) + `<COMMIT>` (Writer snap-to-nearest für arbiträre Hex).
+**Status:** ✅ behoben 2026-06-22 in `40a9b7b` (Reader-Hex-Normalisierung) + `f28d694` (UI-Refresh + Writer Hex→Named) + `c12bb38` (Writer snap-to-nearest für arbiträre Hex). Sven-verifiziert: Farben in Nextcloud's eigener UI sichtbar.
 **Filed:** 2026-06-21 (Erweiterung + Diagnose 2026-06-22)
 
 > **Snap-to-nearest Auflösung der Nextcloud-UI-Limitation:** Wo
