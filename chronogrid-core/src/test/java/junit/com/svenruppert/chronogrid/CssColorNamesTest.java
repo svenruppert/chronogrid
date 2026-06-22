@@ -151,6 +151,40 @@ class CssColorNamesTest {
   }
 
   @Test
+  @DisplayName("CssColorNames.toNameOrNearest snaps Sven's repro #6bbd88 to darkseagreen")
+  void nearestForSvensRepro() {
+    assertEquals("darkseagreen", CssColorNames.toNameOrNearest("#6bbd88"),
+        "rgb(107,189,136) → darkseagreen (#8fbc8f, RGB distance² 1346)");
+  }
+
+  @Test
+  @DisplayName("CssColorNames.toNameOrNearest returns the exact named token when one exists")
+  void nearestPrefersExactMatch() {
+    assertEquals("red", CssColorNames.toNameOrNearest("#ff0000"),
+        "Exact matches must NOT be shifted to a different colour");
+    assertEquals("olive", CssColorNames.toNameOrNearest("#808000"));
+    assertEquals("black", CssColorNames.toNameOrNearest("#000000"));
+  }
+
+  @Test
+  @DisplayName("CssColorNames.toNameOrNearest returns black/white for extreme inputs")
+  void nearestForExtremes() {
+    assertEquals("black", CssColorNames.toNameOrNearest("#010101"),
+        "Almost-black must snap to black");
+    assertEquals("white", CssColorNames.toNameOrNearest("#fefefe"),
+        "Almost-white must snap to white");
+  }
+
+  @Test
+  @DisplayName("CssColorNames.toNameOrNearest passes invalid input through")
+  void nearestForInvalidInput() {
+    org.junit.jupiter.api.Assertions.assertNull(CssColorNames.toNameOrNearest(null));
+    assertEquals("not-hex", CssColorNames.toNameOrNearest("not-hex"));
+    assertEquals("#abc", CssColorNames.toNameOrNearest("#abc"),
+        "3-char hex is unsupported → pass through unchanged");
+  }
+
+  @Test
   @DisplayName("EntryMapper writes a named token to non-Apple targets when an exact match exists")
   void writeNamedForNextcloudOnExactMatch() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
@@ -171,20 +205,28 @@ class CssColorNamesTest {
   }
 
   @Test
-  @DisplayName("EntryMapper keeps hex when preferNamedColors=true but no named equivalent exists")
-  void writeFallsBackToHexWhenNoNamedMatch() {
+  @DisplayName("BUG #12 final fix: arbitrary hex snaps to nearest CSS3 named for non-Apple targets")
+  void writeSnapsArbitraryHexToNearestNamedForNextcloud() {
     EntryMapper mapper = new EntryMapper(ZoneOffset.UTC);
     Entry entry = new Entry("arbitrary-uid");
     entry.setTitle("Arbitrary hex");
     entry.setStart(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 8, 0));
     entry.setEnd(java.time.LocalDateTime.of(2026, java.time.Month.JUNE, 11, 13, 0));
-    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#f08ee8");
+    // Sven's repro: rgb(107, 189, 136) = #6bbd88, Nextcloud-UI
+    // shows nothing for arbitrary hex. The snap converts it to
+    // its nearest named neighbour so Nextcloud's UI renders the
+    // pill. Sven accepted the precision trade-off.
+    entry.setCustomProperty(EntryMapper.CUSTOM_ENTRY_COLOR, "#6bbd88");
 
     String body = mapper.toICalendarText(entry, false, true);
 
-    org.junit.jupiter.api.Assertions.assertTrue(body.contains("COLOR:#f08ee8"),
-        "Arbitrary hex must pass through when no named equivalent exists — "
-            + "we don't lose precision via 'nearest-match' guessing.");
+    org.junit.jupiter.api.Assertions.assertFalse(body.contains("COLOR:#6bbd88"),
+        "Hex form must NOT appear when snap-to-nearest is on — "
+            + "Nextcloud's UI wouldn't render it; got:\n" + body);
+    org.junit.jupiter.api.Assertions.assertTrue(
+        body.contains("COLOR:darkseagreen"),
+        "Expected snap target for #6bbd88 is darkseagreen (#8fbc8f, distance² 1346 "
+            + "beats mediumseagreen's 2838); got:\n" + body);
   }
 
   @Test

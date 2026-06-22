@@ -435,14 +435,18 @@ public final class EntryMapper {
       // safety net for the latter case.
       //
       // BUG #12: when preferNamedColors is set (= non-Apple target,
-      // typically Nextcloud), look up a canonical CSS3 named
-      // equivalent for the hex value and write that instead. Nextcloud's
-      // UI only renders colour pills when COLOR carries a named
-      // token; arbitrary hex values become invisible in its UI
-      // even though they persist correctly through CalDAV. Falls
-      // back to the original hex when no named equivalent exists.
+      // typically Nextcloud), snap the colour to the nearest CSS3
+      // named token. Nextcloud's UI only renders colour pills when
+      // COLOR carries a named token; arbitrary hex values become
+      // invisible in its UI even though they persist correctly
+      // through CalDAV. We trade hex precision for consistent
+      // visualisation in both UIs — Sven explicitly accepted the
+      // snap-to-nearest trade-off after weighing it against the
+      // "colour invisible in Nextcloud-UI" alternative. Exact
+      // matches stay exact; arbitrary hex like #6bbd88 snaps to
+      // its closest named neighbour (e.g. darkseagreen).
       String colourToWrite = preferNamedColors
-          ? CssColorNames.toName(entryColor).orElse(entryColor)
+          ? CssColorNames.toNameOrNearest(entryColor)
           : entryColor;
       vevent.setColor(colourToWrite);
     }

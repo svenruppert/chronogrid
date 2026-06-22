@@ -42,7 +42,7 @@ Tabelle parallel aktualisieren**.
 | #9 | Notifikationen passen nicht zum Mehrverbindungs-Konzept | 🔬 analysiert | — |
 | #10 | Fetch über mehrere Verbindungen parallel/async + Fortschrittsbalken | 🔬 analysiert | — |
 | #11 | Neuer Nextcloud-Termin erscheint dort als AllDay trotz gesetzter Uhrzeit | 🟡 erfasst — Hypothese: AllDay-Default bei neu erzeugten Entries | — |
-| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer Hex→Named | ✅ behoben (Nextcloud-UI-Limitation für arbiträre Hex als Caveat) | `40a9b7b` + `f28d694` |
+| #12 | Per-Event-Farbe auf Nextcloud: Reader-Hex + UI-Refresh + Writer snap-to-nearest CSS3 named | ✅ behoben (arbiträre Hex snappen zum nearest named) | `40a9b7b` + `f28d694` + (pending commit) |
 
 ---
 
@@ -1633,21 +1633,25 @@ Browser-Smoke-Test. Geschätzt 30 Minuten.
 > wird, „verliert der Termin wieder seine Farbe, bzw. kommt
 > wohl nicht in Nextcloud an".
 
-**Status:** ✅ behoben 2026-06-22 in `40a9b7b` (Reader-Hex-Normalisierung) + `f28d694` (UI-Refresh + Writer Hex→Named). Sven-verifiziert für Reader + Writer-Roundtrip in unserer App. Verbleibende Caveat: Nextcloud-Web-UI rendert nur named CSS3 tokens, arbiträre Hex-Werte sind dort nicht sichtbar — als Provider-Limitation akzeptiert.
+**Status:** ✅ behoben 2026-06-22 in `40a9b7b` (Reader-Hex-Normalisierung) + `f28d694` (UI-Refresh + Writer Hex→Named) + `<COMMIT>` (Writer snap-to-nearest für arbiträre Hex).
 **Filed:** 2026-06-21 (Erweiterung + Diagnose 2026-06-22)
 
-> **Akzeptierte Nextcloud-UI-Limitation:** Arbiträre Hex-Werte
-> (z.B. ein User-Pick von `#6bbd88` aus einem Color-Wheel) werden
-> von Nextcloud's eigener Web-UI nicht gerendert — sie zeigt nur
-> Farben deren COLOR-Property ein exaktes CSS3 named token ist.
-> Der Wert persistiert korrekt im iCalendar-Body und ist in unserer
-> App sowie für jeden anderen CalDAV-Client sichtbar. Falls Sven
-> Nextcloud-UI-Sichtbarkeit für einen Termin braucht, wählt er
-> bevorzugt benannte Farben (red, blue, olive, mediumseagreen
-> etc.) — unser Writer macht den Hex→Named-Konvert automatisch.
-> Workarounds wie nearest-named-Approximation oder
-> DESCRIPTION-Marker-für-Nextcloud wurden nach Abwägung des
-> Präzisions- vs. UI-Sichtbarkeits-Trade-offs verworfen.
+> **Snap-to-nearest Auflösung der Nextcloud-UI-Limitation:** Wo
+> ursprünglich nur exakte CSS3-Matches als named token geschrieben
+> wurden (sonst Hex pass-through), schreibt der Writer bei
+> non-Apple-Targets jetzt **immer** einen named token — bei nicht-
+> exakten Matches berechnet `CssColorNames.toNameOrNearest` den
+> RGB-Distance-nächsten der 147 CSS3 Tokens. Sven's Repro
+> `#6bbd88` snappt zu `darkseagreen` (`#8fbc8f`), Nextcloud's UI
+> rendert die Farbe.
+>
+> Trade-off: Präzision wird gegen UI-Konsistenz getauscht. User
+> wählt `#6bbd88` in unserer App → wir schreiben
+> `COLOR:darkseagreen` → Nextcloud-UI zeigt darkseagreen → beim
+> Read-Back `darkseagreen` → `toHex` normalisiert zu `#8fbc8f` →
+> Picker zeigt `#8fbc8f`. Beide UIs konsistent, exakter User-Hex
+> geht verloren. Sven hat diesen Trade-off explizit gewählt nach
+> dem Akzeptiert-Status zurückgekommen.
 
 ### 2026-06-22 Diagnose-Update
 

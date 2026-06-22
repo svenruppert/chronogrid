@@ -89,6 +89,64 @@ public final class CssColorNames {
     return java.util.Optional.empty();
   }
 
+  /**
+   * Returns the canonical CSS3 named token closest to {@code hex}
+   * by Euclidean RGB distance. Exact matches return the canonical
+   * named form (same path as {@link #toName(String)}); arbitrary
+   * hex values get approximated to whichever named colour minimises
+   * {@code (Δr² + Δg² + Δb²)}.
+   *
+   * <p>BUG #12 final fix: Sven's reproduction was {@code rgb(107,
+   * 189, 136)} = {@code #6bbd88}, an arbitrary value Nextcloud's
+   * UI silently dropped. With this method we write the nearest
+   * named token instead so the colour pill shows up. The
+   * downstream price is precision — the user-picked value gets
+   * snapped to the closest of 147 CSS3 colours and round-trips
+   * back as the snapped hex. Sven explicitly accepted the
+   * trade-off: consistent visualisation in both UIs beats exact
+   * hex preservation in our app.
+   *
+   * <p>Returns {@code hex} unchanged when it's null, blank, or
+   * not parseable as 7-char hex — keeps the writer pipeline
+   * resilient against bad input.
+   */
+  public static String toNameOrNearest(String hex) {
+    if (hex == null) return null;
+    String trimmed = hex.trim();
+    if (trimmed.length() != 7 || trimmed.charAt(0) != '#') return hex;
+    // Try exact match first — preserves the canonical token when
+    // the user-picked value lines up with a named colour exactly.
+    java.util.Optional<String> exact = toName(trimmed);
+    if (exact.isPresent()) return exact.get();
+    int r;
+    int g;
+    int b;
+    try {
+      r = Integer.parseInt(trimmed.substring(1, 3), 16);
+      g = Integer.parseInt(trimmed.substring(3, 5), 16);
+      b = Integer.parseInt(trimmed.substring(5, 7), 16);
+    } catch (NumberFormatException e) {
+      return hex;
+    }
+    String bestName = null;
+    long bestDist = Long.MAX_VALUE;
+    for (Map.Entry<String, String> e : CSS3.entrySet()) {
+      String namedHex = e.getValue();
+      int r2 = Integer.parseInt(namedHex.substring(1, 3), 16);
+      int g2 = Integer.parseInt(namedHex.substring(3, 5), 16);
+      int b2 = Integer.parseInt(namedHex.substring(5, 7), 16);
+      long dr = (long) r - r2;
+      long dg = (long) g - g2;
+      long db = (long) b - b2;
+      long d = dr * dr + dg * dg + db * db;
+      if (d < bestDist) {
+        bestDist = d;
+        bestName = e.getKey();
+      }
+    }
+    return bestName != null ? bestName : hex;
+  }
+
   private static final Map<String, String> CSS3 = Map.ofEntries(
       Map.entry("aliceblue", "#f0f8ff"),
       Map.entry("antiquewhite", "#faebd7"),
