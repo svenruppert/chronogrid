@@ -346,6 +346,30 @@ vaadin-date-picker::part(today) {
     background-color: transparent;
 }
 
+/* Folge-Anforderung zu BUG #5: timed Events im Month-View (DayGrid)
+   rendert FullCalendar default als list-item — kleiner Dot + Zeit
+   + Titel, KEIN gefüllter Block. Das ist Design (im Month-View
+   wäre kein Platz für 5+ Klötze pro Tag), aber bei eigener Farbe
+   ging die Farb-Information verloren. Lösung: dem Wrapper-Element
+   einen sichtbaren Border in der EIGENEN Farbe geben — der Dot
+   bleibt in der Kalender-Farbe als Provenance-Signal. Effektive
+   Visualisierung:
+     - AllDay-Event   = gefüllter Block
+     - Timed-Event    = Dot (Kalender-Farbe) + Border (eigene Farbe)
+   Auf einen Blick unterscheidbar.
+
+   `--fc-event-bg-color` wird von FullCalendar aus
+   entry.backgroundColor (= individuelle Farbe nach applyColours)
+   gesetzt. Bei Events ohne eigene Farbe ist bg == border ==
+   calendar — Border in Kalender-Farbe ist auch da kein Schaden,
+   verstärkt nur die Provenance-Kennung. */
+.fc .fc-daygrid-event.fc-daygrid-dot-event {
+    border: 2px solid var(--fc-event-bg-color, transparent);
+    border-radius: 3px;
+    padding: 1px 4px;
+    margin-bottom: 1px;
+}
+
 /* ── Feature #5: per-day dots inside the date-picker popover ────
  *
  * Painted entirely from JavaScript via inline `style` properties

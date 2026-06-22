@@ -537,7 +537,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
     switch (mode) {
       case DAY -> calendar.changeView(CalendarViewImpl.TIME_GRID_DAY);
       case WEEK -> calendar.changeView(CalendarViewImpl.TIME_GRID_WEEK);
-      case MONTH -> calendar.changeView(CalendarViewImpl.DAY_GRID_MONTH);
       case N_DAYS -> applyNDays(readNDaysPreference());
       default -> calendar.changeView(CalendarViewImpl.DAY_GRID_MONTH);
     }

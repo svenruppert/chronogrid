@@ -716,6 +716,18 @@ SpotBugs.
 > war) sondern ein Persist-/Roundtrip-Problem auf der Nextcloud-
 > Seite. Tracking erweitert in **BUG #12**.
 
+> **Folge-Anforderung (UX, behoben am gleichen Tag):** Sven fragte
+> nach dem #5-Fix warum timed Events im Month-View nur einen Dot
+> in Kalender-Farbe zeigen (keine eigene Farbe sichtbar). Das ist
+> FullCalendar's Default-Verhalten für list-item-Rendering im
+> DayGrid — bewusste Design-Entscheidung weil im Month-View kein
+> Platz für 5+ Klötze pro Tag wäre. Lösung: timed Events im
+> Month-View bekommen einen 2-px Border in der eigenen Farbe,
+> Dot bleibt in der Kalender-Farbe. Auf einen Blick: gefüllter
+> Block = AllDay, Border+Dot = timed. CSS-only-Fix in
+> `chronogrid.css`, ein Block (Selector
+> `.fc-daygrid-event.fc-daygrid-dot-event`).
+
 ### Fix-Notiz
 
 Defensive CSS-Erweiterung in `chronogrid.css` deckt Hypothesen A
