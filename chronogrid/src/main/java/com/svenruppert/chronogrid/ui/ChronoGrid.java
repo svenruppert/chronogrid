@@ -205,6 +205,35 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private final java.util.NavigableSet<String> tagUniverse =
       java.util.Collections.synchronizedNavigableSet(new java.util.TreeSet<>());
 
+  /**
+   * Planning-Feature #6: the user's focal day — the calendar date the
+   * UI should keep visible across view-mode switches. Default at mount
+   * is whatever the {@link CalendarStateStore} returns (today on a
+   * fresh session). Every explicit navigation gesture updates this
+   * field; {@link #applyViewMode} then re-anchors the calendar with
+   * {@code gotoDate(focalDay)} after the view change so the user
+   * stays on the same day instead of jumping back to today.
+   *
+   * <p>Update points:
+   * <ul>
+   *   <li>DatePicker value change → picked date</li>
+   *   <li>Slide ± (one-day shift) → new gotoDate target</li>
+   *   <li>Page ± (full-interval) → captured via armed datesRendered listener</li>
+   *   <li>Today button → {@code LocalDate.now()}</li>
+   * </ul>
+   */
+  private LocalDate focalDay;
+
+  /**
+   * Latch armed by page ± wrappers; the next {@code datesRendered}
+   * event consumes it and reads the new interval-start into
+   * {@link #focalDay}. Keeps page-navigation tracking out of the
+   * synchronous (and possibly stale) {@code getCurrentIntervalStart()}
+   * read-path while still letting all other gestures update focal
+   * explicitly with a date computed in Java.
+   */
+  private transient boolean armFocalCapture;
+
   public ChronoGrid() {
     this(new VaadinSessionCalendarStateStore());
   }
@@ -237,6 +266,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
     this.connectionBadge = new ConnectionStatusBadge(
         this.messages, this::onReconnect);
     this.service = service;
+    this.focalDay = stateStore.readFocalDay(LocalDate.now());
 
     VerticalLayout root = getContent();
     root.setSizeFull();
@@ -320,8 +350,25 @@ public class ChronoGrid extends Composite<VerticalLayout>
     this.navigationBar = buildNavigationBar();
     frame.add(navigationBar);
 
-    calendar.addDatesRenderedListener(e ->
-        navigationBar.setIntervalLabel(formatVisibleInterval()));
+    calendar.addDatesRenderedListener(e -> {
+      navigationBar.setIntervalLabel(formatVisibleInterval());
+      // Planning-Feature #6: page-back / page-forward use FullCalendar's
+      // native paging; the post-move interval-start only becomes visible
+      // here. The latch is only armed by those two wrappers — all other
+      // gestures update focalDay synchronously with a Java-computed date,
+      // so we don't accidentally overwrite the focal value on every
+      // gotoDate(focalDay) we issue from applyViewMode.
+      if (armFocalCapture) {
+        armFocalCapture = false;
+        calendar.getCurrentIntervalStart().ifPresent(this::setFocalDay);
+      }
+    });
+
+    // Anchor the initial visible window on the persisted focal day so a
+    // page reload returns the user to where they were, not to today.
+    if (focalDay != null && !focalDay.equals(LocalDate.now())) {
+      calendar.gotoDate(focalDay);
+    }
 
     frame.add(calendar);
     refreshBackendStatus();
@@ -437,19 +484,22 @@ public class ChronoGrid extends Composite<VerticalLayout>
     int initialN = readNDaysPreference();
     CalendarNavigationBar.NavigationCallbacks nav =
         new CalendarNavigationBar.NavigationCallbacks(
-            calendar::previous,    // ⏮ paging back: full interval
+            this::onPageBack,      // ⏮ paging back: full interval
             this::onSlideBack,     // ◀ slide back: one day
-            calendar::today,       // Today
+            this::onToday,         // Today
             this::onSlideForward,  // ▶ slide forward: one day
-            calendar::next);       // ⏭ paging forward: full interval
+            this::onPageForward);  // ⏭ paging forward: full interval
     CalendarNavigationBar bar = new CalendarNavigationBar(
         messages,
-        LocalDateTime.now().toLocalDate(),
+        focalDay,
         CalendarNavigationBar.ViewMode.MONTH,
         initialN,
         nav,
         date -> {
-          if (date != null) calendar.gotoDate(date);
+          if (date != null) {
+            setFocalDay(date);
+            calendar.gotoDate(date);
+          }
         },
         this::applyViewMode,
         this::applyNDays);
@@ -524,13 +574,34 @@ public class ChronoGrid extends Composite<VerticalLayout>
   }
 
   private void onSlideBack() {
-    calendar.getCurrentIntervalStart()
-        .ifPresent(d -> calendar.gotoDate(d.minusDays(1)));
+    calendar.getCurrentIntervalStart().ifPresent(d -> {
+      LocalDate next = d.minusDays(1);
+      setFocalDay(next);
+      calendar.gotoDate(next);
+    });
   }
 
   private void onSlideForward() {
-    calendar.getCurrentIntervalStart()
-        .ifPresent(d -> calendar.gotoDate(d.plusDays(1)));
+    calendar.getCurrentIntervalStart().ifPresent(d -> {
+      LocalDate next = d.plusDays(1);
+      setFocalDay(next);
+      calendar.gotoDate(next);
+    });
+  }
+
+  private void onToday() {
+    setFocalDay(LocalDate.now());
+    calendar.today();
+  }
+
+  private void onPageBack() {
+    armFocalCapture = true;
+    calendar.previous();
+  }
+
+  private void onPageForward() {
+    armFocalCapture = true;
+    calendar.next();
   }
 
   private void applyViewMode(CalendarNavigationBar.ViewMode mode) {
@@ -540,6 +611,19 @@ public class ChronoGrid extends Composite<VerticalLayout>
       case N_DAYS -> applyNDays(readNDaysPreference());
       default -> calendar.changeView(CalendarViewImpl.DAY_GRID_MONTH);
     }
+    // Planning-Feature #6: re-anchor the new view on the user's focal
+    // day so a switch from "Week of 2026-09-15" to "Month" lands in
+    // September 2026, not on today's month. Issued after every
+    // changeView (N-days included — applyNDays calls changeView too).
+    if (focalDay != null) {
+      calendar.gotoDate(focalDay);
+    }
+  }
+
+  private void setFocalDay(LocalDate day) {
+    if (day == null) return;
+    this.focalDay = day;
+    stateStore.writeFocalDay(day);
   }
 
   private void applyNDays(int n) {

@@ -20,6 +20,7 @@ import com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -86,5 +87,27 @@ class VaadinSessionCalendarStateStoreTest {
         VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS);
     assertEquals("calendar.nav.nDays",
         VaadinSessionCalendarStateStore.SESSION_KEY_NDAYS);
+    assertEquals("calendar.nav.focalDay",
+        VaadinSessionCalendarStateStore.SESSION_KEY_FOCAL_DAY);
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #6: readFocalDay falls back to the supplied default without a session")
+  void readFocalDayNoSession() {
+    VaadinSessionCalendarStateStore store = new VaadinSessionCalendarStateStore();
+    LocalDate fallback = LocalDate.of(2026, 9, 15);
+    assertEquals(fallback, store.readFocalDay(fallback));
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #6: writeFocalDay is a silent no-op without a session (must not throw)")
+  void writeFocalDayNoSession() {
+    VaadinSessionCalendarStateStore store = new VaadinSessionCalendarStateStore();
+    store.writeFocalDay(LocalDate.of(2026, 9, 15));
+    store.writeFocalDay(null);
+    // Read still returns the supplied fallback — no session means no
+    // round-trip is possible.
+    LocalDate fallback = LocalDate.of(2026, 7, 4);
+    assertEquals(fallback, store.readFocalDay(fallback));
   }
 }

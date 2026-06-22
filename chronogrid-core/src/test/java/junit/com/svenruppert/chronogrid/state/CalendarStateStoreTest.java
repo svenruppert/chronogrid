@@ -49,6 +49,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -138,6 +139,47 @@ class CalendarStateStoreTest {
     assertTrue(store.readServers().isEmpty());
   }
 
+  @Test
+  @DisplayName("Planning-Feature #6: default readFocalDay returns the supplied fallback")
+  void focalDayDefaultReturnsFallback() {
+    // A bare-minimum impl that doesn't override readFocalDay /
+    // writeFocalDay should still answer reads with the fallback — the
+    // contract is opt-in for the persistence behaviour.
+    CalendarStateStore bare = new CalendarStateStore() {
+      @Override public Optional<CalDavConnectionConfig> readConnection() {
+        return Optional.empty();
+      }
+      @Override public void writeConnection(CalDavConnectionConfig cfg) { }
+      @Override public List<CalDavServerConnection> readServers() {
+        return List.of();
+      }
+      @Override public void writeServers(List<CalDavServerConnection> servers) { }
+      @Override public List<CalendarSubscription> readSubscriptions() {
+        return List.of();
+      }
+      @Override public void writeSubscriptions(List<CalendarSubscription> subs) { }
+      @Override public int readNDays(int fallback) {
+        return fallback;
+      }
+      @Override public void writeNDays(int n) { }
+    };
+    LocalDate fallback = LocalDate.of(2026, 9, 15);
+    assertEquals(fallback, bare.readFocalDay(fallback));
+    // The default write impl is a no-op — must not throw.
+    bare.writeFocalDay(LocalDate.of(2026, 12, 1));
+    assertEquals(fallback, bare.readFocalDay(fallback));
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #6: an impl that overrides focal-day round-trips the value")
+  void focalDayRoundTrip() {
+    CalendarStateStore store = newStore();
+    LocalDate target = LocalDate.of(2026, 9, 15);
+    store.writeFocalDay(target);
+    LocalDate fallback = LocalDate.of(2026, 1, 1);
+    assertEquals(target, store.readFocalDay(fallback));
+  }
+
   // ── in-memory fixture (one of two reference impls for the contract) ──
 
   private static final class InMemoryStore implements CalendarStateStore {
@@ -145,6 +187,7 @@ class CalendarStateStoreTest {
     private List<CalDavServerConnection> servers = List.of();
     private List<CalendarSubscription> subscriptions = List.of();
     private Integer nDays;
+    private LocalDate focalDay;
 
     @Override public Optional<CalDavConnectionConfig> readConnection() {
       return Optional.ofNullable(connection);
@@ -169,6 +212,12 @@ class CalendarStateStoreTest {
     }
     @Override public void writeNDays(int n) {
       this.nDays = n;
+    }
+    @Override public LocalDate readFocalDay(LocalDate fallback) {
+      return focalDay == null ? fallback : focalDay;
+    }
+    @Override public void writeFocalDay(LocalDate day) {
+      this.focalDay = day;
     }
   }
 }

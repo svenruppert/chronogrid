@@ -126,4 +126,23 @@ public interface CalendarStateStore {
   default void clearEntryColour(String entryUid) {
     // no-op default
   }
+
+  /**
+   * Planning-Feature #6 hook: the user's focal day — the date the
+   * UI should keep visible when the view mode switches. Default
+   * impl returns {@code fallback} so external stores that don't
+   * persist this opt in transparently.
+   *
+   * <p>The Vaadin-session impl ({@code VaadinSessionCalendarStateStore})
+   * persists the value across navigations so a user who jumped to
+   * 2026-09-15 in Week-view and then switched to Month-view lands
+   * in September, not on today's month.
+   */
+  default java.time.LocalDate readFocalDay(java.time.LocalDate fallback) {
+    return fallback;
+  }
+
+  default void writeFocalDay(java.time.LocalDate day) {
+    // no-op default
+  }
 }

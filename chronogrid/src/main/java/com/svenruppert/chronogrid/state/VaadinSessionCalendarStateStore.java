@@ -48,6 +48,7 @@ public final class VaadinSessionCalendarStateStore
   public static final String SESSION_KEY_NDAYS = "calendar.nav.nDays";
   public static final String SESSION_KEY_TAG_FILTER = "calendar.tagFilter";
   public static final String SESSION_KEY_ENTRY_COLOURS = "calendar.entryColours";
+  public static final String SESSION_KEY_FOCAL_DAY = "calendar.nav.focalDay";
 
   @Override
   public Optional<CalDavConnectionConfig> readConnection() {
@@ -184,6 +185,25 @@ public final class VaadinSessionCalendarStateStore
       return out;
     }
     return java.util.Map.of();
+  }
+
+  @Override
+  public java.time.LocalDate readFocalDay(java.time.LocalDate fallback) {
+    VaadinSession session = VaadinSession.getCurrent();
+    if (session == null) return fallback;
+    Object raw = session.getAttribute(SESSION_KEY_FOCAL_DAY);
+    return raw instanceof java.time.LocalDate d ? d : fallback;
+  }
+
+  @Override
+  public void writeFocalDay(java.time.LocalDate day) {
+    VaadinSession session = VaadinSession.getCurrent();
+    if (session == null) return;
+    if (day == null) {
+      session.setAttribute(SESSION_KEY_FOCAL_DAY, null);
+    } else {
+      session.setAttribute(SESSION_KEY_FOCAL_DAY, day);
+    }
   }
 
   @Override
