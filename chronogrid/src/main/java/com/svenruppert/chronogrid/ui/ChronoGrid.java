@@ -239,6 +239,26 @@ public class ChronoGrid extends Composite<VerticalLayout>
    */
   private transient boolean armFocalCapture;
 
+  /**
+   * Planning-Feature #8 Stage B — smart-delay window before the
+   * progress bar becomes visible. Fast refreshes (single-server,
+   * cached, &lt; 500 ms) never flash the bar; slow ones
+   * (multi-server, cold-cache, hanging) show it.
+   */
+  public static final int PROGRESS_SMART_DELAY_MS = 500;
+
+  /**
+   * Indeterminate progress bar shown in the toolbar status row during
+   * a user-triggered refresh. Idle: hidden + the show-future is null.
+   * Active: show-future scheduled; on {@code datesRendered} firing
+   * inside {@code PROGRESS_SMART_DELAY_MS}, the future is cancelled
+   * before the bar ever appears.
+   */
+  private transient com.vaadin.flow.component.progressbar.ProgressBar progressBar;
+  private transient java.util.concurrent.ScheduledExecutorService progressScheduler;
+  private transient volatile java.util.concurrent.ScheduledFuture<?>
+      pendingProgressShow;
+
   public ChronoGrid() {
     this(new VaadinSessionCalendarStateStore());
   }
@@ -372,6 +392,10 @@ public class ChronoGrid extends Composite<VerticalLayout>
         armFocalCapture = false;
         calendar.getCurrentIntervalStart().ifPresent(this::setFocalDay);
       }
+      // Feature #8 Stage B: hide progress bar (cancel any pending
+      // smart-delay show along the way). Idempotent — safe to call
+      // even when no refresh was in flight.
+      hideProgressBar();
     });
 
     // Anchor the initial visible window on the persisted focal day so a
@@ -388,6 +412,17 @@ public class ChronoGrid extends Composite<VerticalLayout>
       com.vaadin.flow.component.UI ui = e.getUI();
       ui.setPollInterval(HEALTH_POLL_INTERVAL_MS);
       pollRegistration = ui.addPollListener(p -> probeQuietly());
+      // Feature #8 Stage B: lazy-init the smart-delay scheduler when
+      // the view actually attaches. Daemon thread + per-UI lifecycle
+      // means no thread leak on logout/route-switch.
+      if (progressScheduler == null) {
+        progressScheduler = java.util.concurrent.Executors
+            .newSingleThreadScheduledExecutor(r -> {
+              Thread t = new Thread(r, "chronogrid-progress");
+              t.setDaemon(true);
+              return t;
+            });
+      }
     });
     addDetachListener(e -> {
       if (pollRegistration != null) {
@@ -395,6 +430,11 @@ public class ChronoGrid extends Composite<VerticalLayout>
         pollRegistration = null;
       }
       e.getUI().setPollInterval(-1);
+      cancelPendingProgressShow();
+      if (progressScheduler != null) {
+        progressScheduler.shutdownNow();
+        progressScheduler = null;
+      }
     });
   }
 
@@ -418,8 +458,17 @@ public class ChronoGrid extends Composite<VerticalLayout>
     Span backendLabel = new Span(messages.tr(K_TB_BACKEND, "Servers:"));
     backendLabel.addClassName("chronogrid-secondary-text");
 
+    // Feature #8 Stage B: indeterminate progress bar in the status
+    // row. Hidden by default; shown on user-triggered refresh after
+    // the PROGRESS_SMART_DELAY_MS window; hidden on datesRendered.
+    progressBar = new com.vaadin.flow.component.progressbar.ProgressBar();
+    progressBar.setIndeterminate(true);
+    progressBar.setId("calendar-toolbar-progress");
+    progressBar.setVisible(false);
+    progressBar.setWidth("120px");
+
     HorizontalLayout status = new HorizontalLayout(
-        backendLabel, serverStatusList, connectionBadge);
+        backendLabel, serverStatusList, connectionBadge, progressBar);
     status.setAlignItems(FlexComponent.Alignment.CENTER);
     status.setSpacing(true);
 
@@ -434,12 +483,12 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
     Button refresh = new Button(messages.tr(K_TB_REFRESH, "Refresh"),
         VaadinIcon.REFRESH.create(), e -> {
+          // Feature #8 Stage B: arm the smart-delay progress bar
+          // BEFORE refreshAll triggers the fetch round-trip. If the
+          // datesRendered fires before PROGRESS_SMART_DELAY_MS, the
+          // bar never appears.
+          scheduleProgressShow();
           calendar.getEntryProvider().refreshAll();
-          // Schicht 4: multi-server-aware. The pre-Schicht-4 message
-          // named only the primary collection URI — misleading when
-          // 3 different CalDAV backends just got re-queried in
-          // parallel. The summary is the same shape the Quick-Toggle
-          // and the Connection-Manager footer would render.
           notifyInfo(messages.tr(K_NOTIFY_REFRESHED,
               "Refreshed — {0}", multiServerSummary()));
         });
@@ -1865,6 +1914,45 @@ public class ChronoGrid extends Composite<VerticalLayout>
         .map(s -> messages.tr(K_NOTIFY_SERVER_NAMED, " [{0}]",
             s.displayName()))
         .orElse("");
+  }
+
+  /**
+   * Feature #8 Stage B: schedules the progress bar's appearance after
+   * the {@link #PROGRESS_SMART_DELAY_MS} window. Cancels any pending
+   * earlier schedule so back-to-back refreshes coalesce. The worker
+   * thread bounces back onto the UI thread via {@link com.vaadin.flow.component.UI#access(com.vaadin.flow.server.Command)}
+   * before touching any component state.
+   */
+  private void scheduleProgressShow() {
+    cancelPendingProgressShow();
+    if (progressScheduler == null || progressBar == null) return;
+    com.vaadin.flow.component.UI ui = com.vaadin.flow.component.UI.getCurrent();
+    if (ui == null) return;
+    pendingProgressShow = progressScheduler.schedule(() -> {
+      try {
+        ui.access(() -> progressBar.setVisible(true));
+      } catch (com.vaadin.flow.component.UIDetachedException ignored) {
+        // UI gone — nothing to show.
+      }
+    }, PROGRESS_SMART_DELAY_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+  }
+
+  private void cancelPendingProgressShow() {
+    java.util.concurrent.ScheduledFuture<?> f = pendingProgressShow;
+    if (f != null) {
+      f.cancel(false);
+      pendingProgressShow = null;
+    }
+  }
+
+  /**
+   * Hides the progress bar and drops any pending smart-delay show.
+   * Idempotent so callers (datesRendered listener, detach) don't
+   * have to track state.
+   */
+  private void hideProgressBar() {
+    cancelPendingProgressShow();
+    if (progressBar != null) progressBar.setVisible(false);
   }
 
   private static void notifyInfo(String text) {

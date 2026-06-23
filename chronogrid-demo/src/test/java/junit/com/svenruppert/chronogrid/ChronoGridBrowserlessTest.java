@@ -475,6 +475,33 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #8 Stage B: toolbar carries the (initially hidden) progress bar with smart-delay = 500ms")
+  void progressBarMountsHiddenWithSmartDelayPinned() {
+    AppUser user = new AppUser(98L, "Progress User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    navigate(CalendarRouteView.class);
+
+    com.vaadin.flow.component.progressbar.ProgressBar bar =
+        allDescendants(com.vaadin.flow.component.UI.getCurrent())
+            .filter(com.vaadin.flow.component.progressbar.ProgressBar.class::isInstance)
+            .map(com.vaadin.flow.component.progressbar.ProgressBar.class::cast)
+            .filter(p -> "calendar-toolbar-progress".equals(p.getId().orElse(null)))
+            .findFirst()
+            .orElse(null);
+    assertNotNull(bar,
+        "toolbar must mount the progress bar with id 'calendar-toolbar-progress'");
+    // The bar starts hidden — only the smart-delay show-path makes it
+    // visible, and only when a refresh genuinely takes long.
+    assertEquals(false, bar.isVisible(),
+        "progress bar must start hidden");
+    // The smart-delay window is the contract: < 500ms refreshes never
+    // flash the bar, > 500ms show it.
+    assertEquals(500, ChronoGrid.PROGRESS_SMART_DELAY_MS);
+  }
+
+  @Test
   @DisplayName("Planning-Feature #7 Schicht 4: multiServerSummary collapses servers + subs + visible count into one line")
   void multiServerSummaryReflectsStateStore() throws Exception {
     AppUser user = new AppUser(97L, "Summary User",
