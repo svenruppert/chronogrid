@@ -26,6 +26,7 @@ import com.svenruppert.flow.security.model.AppUser;
 import com.svenruppert.flow.security.roles.AuthorizationRole;
 import com.svenruppert.flow.views.AppLoginView;
 import com.svenruppert.flow.views.CalendarRouteView;
+import com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore;
 import com.svenruppert.chronogrid.ui.ChronoGrid;
 import com.svenruppert.jsentinel.authorization.api.SubjectStores;
 import com.vaadin.browserless.BrowserlessTest;
@@ -80,18 +81,18 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
       // through CalendarServiceProvider) lands on the fixture and not
       // the bundled iCloud preset URL.
       URI collection = fixture.baseUri().resolve("/calendars/personal/");
-      session.setAttribute(ChronoGrid.SESSION_KEY_CONNECTION,
+      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION,
           CalDavConnectionConfig.anonymous(collection));
-      session.setAttribute(ChronoGrid.SESSION_KEY_SUBSCRIPTIONS, null);
-      session.setAttribute(ChronoGrid.SESSION_KEY_SERVERS, null);
-      session.setAttribute(ChronoGrid.SESSION_KEY_NDAYS, null);
+      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS, null);
+      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS, null);
+      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_NDAYS, null);
     }
   }
 
   @Test
   @DisplayName("NAV constant is 'calendar'")
   void navConstant() {
-    assertEquals("calendar", ChronoGrid.NAV);
+    assertEquals("calendar", CalendarRouteView.NAV);
   }
 
   @Test
@@ -123,14 +124,14 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
 
     navigate(CalendarRouteView.class);
     ChronoGrid view = findCalendarView();
-    assertEquals(ChronoGrid.ConnectionState.UNKNOWN, view.connectionState(),
+    assertEquals(com.svenruppert.chronogrid.ui.ConnectionStatusBadge.State.UNKNOWN, view.connectionState(),
         "badge must start as UNKNOWN until the first fetch resolves");
 
     findFullCalendar().getEntryProvider().fetch(
         java.time.LocalDateTime.now().minusDays(1),
         java.time.LocalDateTime.now().plusDays(1))
         .toList();
-    assertEquals(ChronoGrid.ConnectionState.CONNECTED, view.connectionState(),
+    assertEquals(com.svenruppert.chronogrid.ui.ConnectionStatusBadge.State.CONNECTED, view.connectionState(),
         "after a successful REPORT the badge must show CONNECTED");
   }
 
@@ -150,10 +151,10 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
         com.svenruppert.chronogrid.service.CalDavServerConnection.create(
             "Offline", URI.create("http://127.0.0.1:1/"), null, null);
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SERVERS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS,
         java.util.List.of(liveServer, deadServer));
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(liveUri, "Personal", "#1F77B4",
                 true, liveServer.id()),
@@ -172,7 +173,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     // action. The user sees a per-failure toast for the dead one
     // (not assertable in BrowserlessTest, but the markConnected
     // path is the contract here).
-    assertEquals(ChronoGrid.ConnectionState.CONNECTED, view.connectionState(),
+    assertEquals(com.svenruppert.chronogrid.ui.ConnectionStatusBadge.State.CONNECTED, view.connectionState(),
         "with one client up and one down, the badge must stay CONNECTED "
             + "(BACKLOG-#9 follow-up: partial-failure isolation)");
   }
@@ -181,7 +182,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   @DisplayName("badge shows DISCONNECTED when the backend is unreachable")
   void badgeFlipsToDisconnectedOnIoFailure() {
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_CONNECTION,
+        VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION,
         CalDavConnectionConfig.anonymous(
             URI.create("http://127.0.0.1:1/calendars/nonexistent/")));
 
@@ -196,7 +197,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
         java.time.LocalDateTime.now().minusDays(1),
         java.time.LocalDateTime.now().plusDays(1))
         .toList();
-    assertEquals(ChronoGrid.ConnectionState.DISCONNECTED, view.connectionState(),
+    assertEquals(com.svenruppert.chronogrid.ui.ConnectionStatusBadge.State.DISCONNECTED, view.connectionState(),
         "after an I/O failure the badge must flip to DISCONNECTED");
   }
 
@@ -248,12 +249,12 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     AppUser user = new AppUser(121L, "N User",
         EnumSet.of(AuthorizationRole.USER));
     SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
-    VaadinSession.getCurrent().setAttribute(ChronoGrid.SESSION_KEY_NDAYS, 11);
+    VaadinSession.getCurrent().setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_NDAYS, 11);
 
     navigate(CalendarRouteView.class);
 
     Object stored = VaadinSession.getCurrent()
-        .getAttribute(ChronoGrid.SESSION_KEY_NDAYS);
+        .getAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_NDAYS);
     assertEquals(11, stored,
         "navigation bar must respect a session-stored N-days preference");
   }
@@ -273,9 +274,9 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
         com.svenruppert.chronogrid.service.CalDavServerConnection.create(
             "Offline", URI.create("http://127.0.0.1:1/"), null, null);
 
-    VaadinSession.getCurrent().setAttribute(ChronoGrid.SESSION_KEY_SERVERS,
+    VaadinSession.getCurrent().setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS,
         java.util.List.of(live, dead));
-    VaadinSession.getCurrent().setAttribute(ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+    VaadinSession.getCurrent().setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(fixtureCollection, "Personal",
                 "#1F77B4", true, live.id()),
@@ -323,17 +324,17 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     URI ncWork = URI.create("https://nextcloud.example/dav/calendars/alice/work/");
     URI ncFamily = URI.create("https://nextcloud.example/dav/calendars/alice/family/");
 
-    VaadinSession.getCurrent().setAttribute(ChronoGrid.SESSION_KEY_SERVERS,
+    VaadinSession.getCurrent().setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS,
         java.util.List.of(icloud, nextcloud));
-    VaadinSession.getCurrent().setAttribute(ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+    VaadinSession.getCurrent().setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(icloudHome, "Home", "#1F77B4", true, icloud.id()),
             new CalendarSubscription(ncWork, "Work", "#FF7F0E", true, nextcloud.id()),
             new CalendarSubscription(ncFamily, "Family", "#2CA02C", false, nextcloud.id())));
 
-    assertEquals(2, ChronoGrid.readServers().size());
-    assertEquals(3, ChronoGrid.readSubscriptions().size());
-    long fromNextcloud = ChronoGrid.readSubscriptions().stream()
+    assertEquals(2, new VaadinSessionCalendarStateStore().readServers().size());
+    assertEquals(3, new VaadinSessionCalendarStateStore().readSubscriptions().size());
+    long fromNextcloud = new VaadinSessionCalendarStateStore().readSubscriptions().stream()
         .filter(s -> nextcloud.id().equals(s.serverId()))
         .count();
     assertEquals(2L, fromNextcloud,
@@ -350,7 +351,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     URI home = URI.create("https://caldav.icloud.com/u/calendars/home/");
     URI work = URI.create("https://caldav.icloud.com/u/calendars/work/");
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(home, "Home", "#1F77B4", true),
             new CalendarSubscription(work, "Work", "#FF7F0E", true)));
@@ -362,9 +363,9 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     // the responsibility now. What we still verify here: the session-
     // seeded subscriptions survive the round-trip through the
     // ChronoGrid mount.
-    assertEquals(2, ChronoGrid.readSubscriptions().size(),
+    assertEquals(2, new VaadinSessionCalendarStateStore().readSubscriptions().size(),
         "two subscriptions must be stored");
-    assertTrue(ChronoGrid.readSubscriptions().stream()
+    assertTrue(new VaadinSessionCalendarStateStore().readSubscriptions().stream()
         .allMatch(CalendarSubscription::visible),
         "both subscriptions start visible");
   }
@@ -383,7 +384,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     // "(2/3)" in either locale: the {0}/{1} placeholder pair is the
     // contract that drives the at-a-glance toolbar count.
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(home, "Home", "#1F77B4", true),
             new CalendarSubscription(work, "Work", "#FF7F0E", true),
@@ -466,7 +467,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     URI subA = URI.create("https://caldav.example/u/personal/");
     URI subB = URI.create("https://caldav.example/u/family/");
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(subA, "Personal", "#1F77B4", true, serverId),
             new CalendarSubscription(subB, "Family", "#FF7F0E", false, serverId)));
@@ -566,7 +567,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     URI sc = URI.create("https://caldav.example/srv2/cal-c/");
     // 2 servers, 3 calendars, 2 visible (sc is hidden).
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(
             new CalendarSubscription(sa, "Alpha-A", "#1F77B4", true, srv1),
             new CalendarSubscription(sb, "Alpha-B", "#FF7F0E", true, srv1),
@@ -622,7 +623,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     navigate(CalendarRouteView.class);
 
     java.util.List<com.svenruppert.chronogrid.service.CalDavServerConnection>
-        servers = ChronoGrid.readServers();
+        servers = new VaadinSessionCalendarStateStore().readServers();
     assertEquals(1, servers.size(),
         "migration must produce exactly one server");
     assertEquals("alice", servers.get(0).username(),
@@ -630,7 +631,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     assertEquals("secret", servers.get(0).password(),
         "migrated server must carry the legacy password");
 
-    java.util.List<CalendarSubscription> subs = ChronoGrid.readSubscriptions();
+    java.util.List<CalendarSubscription> subs = new VaadinSessionCalendarStateStore().readSubscriptions();
     assertEquals(1, subs.size(),
         "migration must produce exactly one subscription");
     assertEquals(legacyUri, subs.get(0).uri(),
@@ -674,19 +675,19 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
             existingServerId, "Already here",
             URI.create("https://caldav.example/multi/"), "bob", "pw")));
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
         java.util.List.of(new CalendarSubscription(existingSub,
             "Already", "#FF0000", true, existingServerId)));
 
     navigate(CalendarRouteView.class);
 
     java.util.List<com.svenruppert.chronogrid.service.CalDavServerConnection>
-        servers = ChronoGrid.readServers();
+        servers = new VaadinSessionCalendarStateStore().readServers();
     assertEquals(1, servers.size(),
         "no-op migration must leave server count at 1 (the pre-existing one)");
     assertEquals(existingServerId, servers.get(0).id(),
         "migration must not replace the pre-existing server entry");
-    assertEquals(1, ChronoGrid.readSubscriptions().size(),
+    assertEquals(1, new VaadinSessionCalendarStateStore().readSubscriptions().size(),
         "no-op migration must leave subscription count at 1");
   }
 
@@ -735,7 +736,7 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   void sessionAttributeOverridesProviderDefault() throws IOException {
     URI overrideUri = URI.create("http://127.0.0.1:1/calendars/nonexistent/");
     VaadinSession.getCurrent().setAttribute(
-        ChronoGrid.SESSION_KEY_CONNECTION,
+        VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION,
         CalDavConnectionConfig.anonymous(overrideUri));
 
     AppUser user = new AppUser(61L, "Override User",

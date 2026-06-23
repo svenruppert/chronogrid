@@ -88,40 +88,10 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   private static final long serialVersionUID = 1L;
 
-  /** @deprecated route lives on the host wrapper; this constant is
-   *     kept for the BrowserlessTest fixtures only. */
-  @Deprecated
-  public static final String NAV = "calendar";
-
-  // Session-attribute keys re-exported for backward compatibility —
-  // the canonical home is now VaadinSessionCalendarStateStore. Test
-  // fixtures and any host code that pokes the session directly should
-  // migrate to the store API.
-  /** @deprecated use {@link VaadinSessionCalendarStateStore#SESSION_KEY_CONNECTION}. */
-  @Deprecated
-  public static final String SESSION_KEY_CONNECTION =
-      VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION;
-  /** @deprecated use {@link VaadinSessionCalendarStateStore#SESSION_KEY_SUBSCRIPTIONS}. */
-  @Deprecated
-  public static final String SESSION_KEY_SUBSCRIPTIONS =
-      VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS;
-  /** @deprecated use {@link VaadinSessionCalendarStateStore#SESSION_KEY_SERVERS}. */
-  @Deprecated
-  public static final String SESSION_KEY_SERVERS =
-      VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS;
-  /** @deprecated use {@link VaadinSessionCalendarStateStore#SESSION_KEY_NDAYS}. */
-  @Deprecated
-  public static final String SESSION_KEY_NDAYS =
-      VaadinSessionCalendarStateStore.SESSION_KEY_NDAYS;
-
   public static final String STATUS_BADGE_ID = ConnectionStatusBadge.ID;
 
   /** Health-probe interval used both as poll cadence and probe window. */
   static final int HEALTH_POLL_INTERVAL_MS = 15_000;
-
-  /** @deprecated mirror of {@link ConnectionStatusBadge.State} kept for tests. */
-  @Deprecated
-  public enum ConnectionState { UNKNOWN, CONNECTED, DISCONNECTED }
 
   // i18n keys
   private static final String K_HEADING = "calendar.heading";
@@ -134,7 +104,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_FIELD_URL = "calendar.field.url";
   private static final String K_FIELD_START = "calendar.field.start";
   private static final String K_FIELD_END = "calendar.field.end";
-  private static final String K_ACTION_SAVE = "calendar.action.save";
   private static final String K_ACTION_DELETE = "calendar.action.delete";
   private static final String K_ACTION_CANCEL = "calendar.action.cancel";
   private static final String K_DELETE_CONFIRM_TITLE = "calendar.dialog.delete.title";
@@ -948,13 +917,9 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   // ── connection-state machine ───────────────────────────────────
 
-  /** Visible for tests. */
-  public ConnectionState connectionState() {
-    return switch (connectionBadge.state()) {
-      case CONNECTED -> ConnectionState.CONNECTED;
-      case DISCONNECTED -> ConnectionState.DISCONNECTED;
-      default -> ConnectionState.UNKNOWN;
-    };
+  /** Visible for tests. Forwards the badge's current state directly. */
+  public ConnectionStatusBadge.State connectionState() {
+    return connectionBadge.state();
   }
 
   private void markConnected() {
@@ -1489,11 +1454,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
     return new CalendarService(entryUri);
   }
 
-  private CalDavConnectionConfig currentConfig() {
-    return stateStore.readConnection()
-        .orElseGet(() -> CalDavConnectionConfig.anonymous(service.collectionUri()));
-  }
-
   /**
    * Planning-Feature #7 Schicht 5 — one-shot legacy migration.
    *
@@ -1553,26 +1513,8 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   // ── subscriptions + servers (state-store backed) ───────────────
 
-  /**
-   * @deprecated kept for the BrowserlessTest fixtures. New callers
-   *     should resolve a {@link CalendarStateStore} explicitly.
-   */
-  @Deprecated
-  public static java.util.List<CalendarSubscription> readSubscriptions() {
-    return new VaadinSessionCalendarStateStore().readSubscriptions();
-  }
-
   private void storeSubscriptions(java.util.List<CalendarSubscription> subs) {
     stateStore.writeSubscriptions(subs);
-  }
-
-  /**
-   * @deprecated kept for the BrowserlessTest fixtures. New callers
-   *     should resolve a {@link CalendarStateStore} explicitly.
-   */
-  @Deprecated
-  public static java.util.List<CalDavServerConnection> readServers() {
-    return new VaadinSessionCalendarStateStore().readServers();
   }
 
   private void storeServers(java.util.List<CalDavServerConnection> servers) {
