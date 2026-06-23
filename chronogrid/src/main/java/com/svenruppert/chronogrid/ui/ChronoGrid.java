@@ -21,7 +21,6 @@ import com.svenruppert.chronogrid.client.CalDavClient;
 import com.svenruppert.chronogrid.client.CalDavDiscovery;
 import com.svenruppert.chronogrid.client.CalDavErrors;
 import com.svenruppert.chronogrid.client.DiscoveredCalendar;
-import com.svenruppert.chronogrid.service.CalDavConnectionConfig;
 import com.svenruppert.chronogrid.service.CalDavProviderPreset;
 import com.svenruppert.chronogrid.service.CalDavServerConnection;
 import com.svenruppert.chronogrid.service.CalendarService;
@@ -263,11 +262,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
         this.messages, this::onReconnect);
     this.service = service;
     this.focalDay = stateStore.readFocalDay(LocalDate.now());
-
-    // Planning-Feature #7 Schicht 5: one-shot legacy migration.
-    // Run BEFORE anything reads servers/subscriptions so the rest
-    // of the constructor sees the migrated multi-server state.
-    migrateLegacyConnectionIfNeeded();
 
     VerticalLayout root = getContent();
     root.setSizeFull();
@@ -1180,27 +1174,16 @@ public class ChronoGrid extends Composite<VerticalLayout>
     probeAllServers();
   }
 
-  // ── settings dialog ────────────────────────────────────────────
+  // ── wizard apply ───────────────────────────────────────────────
 
   private boolean applyConfig(String rawUri, String user, String pass,
                               java.util.Set<DiscoveredCalendar> picked) {
     URI parsed = parseUri(rawUri);
     if (parsed == null) return false;
-    // Each Settings.Save adds (or refreshes) ONE server entry.
+    // Each wizard Finish adds (or refreshes) ONE server entry.
     // Subscriptions get stamped with that server's id.
     CalDavServerConnection server = upsertServer(parsed, user, pass);
     mergeSubscriptionsWithServer(parsed, picked, server.id());
-
-    // Keep a back-compat single-cal config in the session for any
-    // callers still reading SESSION_KEY_CONNECTION.
-    List<URI> additional = new java.util.ArrayList<>();
-    if (picked != null) {
-      for (DiscoveredCalendar c : picked) {
-        if (!c.href().equals(parsed)) additional.add(c.href());
-      }
-    }
-    storeConfig(new CalDavConnectionConfig(
-        parsed, user, pass, additional).normalised());
 
     rebuildServiceFromSubscriptions();
     calendar.getEntryProvider().refreshAll();
@@ -1412,36 +1395,27 @@ public class ChronoGrid extends Composite<VerticalLayout>
   // ── state-store-backed config helpers ──────────────────────────
 
   private static CalendarService resolveInitialService(CalendarStateStore store) {
-    // BUG #4 fix: multi-server state lives in
-    // readSubscriptions() + readServers(); the legacy single-server
-    // state lives in readConnection(). When the user has more than
-    // one server connected, only the multi-server state is
-    // authoritative — readConnection() ends up reflecting just the
-    // most-recently-applied connection. Re-mounting the ChronoGrid
-    // (new UI instance via route navigation, F5, re-login) was
-    // therefore rebuilding the service with only ONE client while
-    // visibleUris() correctly enumerated the full subscription set
-    // — the other calendars never got queried.
-    //
-    // Restore multi-server state first; fall back to the legacy
-    // single-connection path; final fallback is the preset default.
+    // Multi-server world: subs + servers are the single source of
+    // truth. When the state store has at least one subscription the
+    // service is rebuilt from the subscription/server pairing.
+    // Otherwise — fresh session — fall back to the preset default
+    // (anonymous iCloud URL) until the user adds a connection via
+    // the Connection Manager wizard.
     java.util.List<CalendarSubscription> subs = store.readSubscriptions();
     if (!subs.isEmpty()) {
       return CalendarService.fromConnections(
           store.readServers(), subs, ZoneId.systemDefault());
     }
-    return store.readConnection()
-        .map(cfg -> CalendarService.fromConfig(cfg, ZoneId.systemDefault()))
-        .orElseGet(ChronoGrid::defaultServiceFromPreset);
+    return defaultServiceFromPreset();
   }
 
   /**
    * Fallback when the {@link CalendarStateStore} has no stored
-   * connection and no explicit service was constructor-injected.
+   * subscriptions and no explicit service was constructor-injected.
    * Constructs an anonymous {@link CalendarService} pointing at the
    * first {@link CalDavProviderPreset#DEFAULTS} entry — i.e. the
-   * Apple iCloud quick-connect URL. The user will need to enter
-   * credentials in the Settings dialog before any data flows.
+   * Apple iCloud quick-connect URL. The user must complete the
+   * Connection Manager wizard before any data flows.
    *
    * <p>Tests that need a different default (e.g. a local testbench
    * port) should construct {@code ChronoGrid} via the explicit
@@ -1452,63 +1426,6 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static CalendarService defaultServiceFromPreset() {
     URI entryUri = URI.create(CalDavProviderPreset.DEFAULTS.get(0).entryUri());
     return new CalendarService(entryUri);
-  }
-
-  /**
-   * Planning-Feature #7 Schicht 5 — one-shot legacy migration.
-   *
-   * <p>Pre-multi-server sessions stored a single
-   * {@link CalDavConnectionConfig} under the legacy
-   * {@code calendar.connection.config} session key. The Connection
-   * Manager + Wizard + Quick-Toggle work exclusively against the
-   * multi-server state (servers + subscriptions). Without a
-   * migration step, an existing user who upgrades would see an
-   * empty Connection Manager + lose their stored credentials.
-   *
-   * <p>The migration runs at most once per session (idempotent: it
-   * checks for an existing server/subscription before doing
-   * anything) and converts the legacy single-connection into one
-   * {@link CalDavServerConnection} + one {@link CalendarSubscription}
-   * stamped with that server's id.
-   *
-   * <p><b>Risk-mitigation:</b> the legacy session key is NOT
-   * deleted by this migration. Both stores stay readable so a
-   * mid-deploy rollback can re-mount the legacy connection without
-   * data loss. A future major release will pull the legacy key
-   * once telemetry shows zero readers.
-   */
-  private void migrateLegacyConnectionIfNeeded() {
-    if (!stateStore.readSubscriptions().isEmpty()) return;
-    if (!stateStore.readServers().isEmpty()) return;
-    java.util.Optional<CalDavConnectionConfig> legacy = stateStore.readConnection();
-    if (legacy.isEmpty()) return;
-
-    CalDavConnectionConfig cfg = legacy.get();
-    URI collection = cfg.collectionUri();
-    // Use the collection URI as the server's baseUri too — the user
-    // can refine via the Connection-Manager's Re-discover later.
-    CalDavServerConnection server = CalDavServerConnection.create(
-        "Migrated", collection,
-        cfg.username() == null ? "" : cfg.username(),
-        cfg.password() == null ? "" : cfg.password());
-    // Pick a deterministic default colour for the migrated entry —
-    // the user can re-colour via the Connection-Manager's inline
-    // picker any time.
-    CalendarSubscription sub = new CalendarSubscription(
-        collection,
-        "Migrated calendar",
-        "#1F77B4",
-        true,
-        server.id());
-    stateStore.writeServers(java.util.List.of(server));
-    stateStore.writeSubscriptions(java.util.List.of(sub));
-    rebuildServiceFromSubscriptions();
-    logger().info("Migrated legacy single-server connection to multi-server state: {}",
-        collection);
-  }
-
-  private void storeConfig(CalDavConnectionConfig config) {
-    stateStore.writeConnection(config);
   }
 
   // ── subscriptions + servers (state-store backed) ───────────────
@@ -1548,12 +1465,14 @@ public class ChronoGrid extends Composite<VerticalLayout>
         creds -> {
           URI parsed = parseUri(creds[0]);
           if (parsed == null) return false;
-          CalDavConnectionConfig probeConfig =
-              new CalDavConnectionConfig(parsed, creds[1], creds[2]).normalised();
+          String user = creds[1] == null ? "" : creds[1].trim();
+          String pass = creds[2] == null ? "" : creds[2].trim();
+          CalDavClient probe = user.isBlank()
+              ? new CalDavClient(parsed)
+              : new CalDavClient(parsed, user, pass);
           try {
-            CalendarService.fromConfig(probeConfig, displayZone)
-                .findInRange(LocalDateTime.now().minusHours(1),
-                    LocalDateTime.now().plusHours(1)).count();
+            java.time.Instant now = java.time.Instant.now();
+            probe.findInRange(now.minusSeconds(3600), now.plusSeconds(3600));
             return true;
           } catch (RuntimeException ex) {
             logger().info("Wizard probe against {} failed: {}",

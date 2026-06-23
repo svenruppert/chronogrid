@@ -69,14 +69,15 @@ import java.util.stream.Stream;
  * read-only role can be granted {@code calendar:read} while
  * {@code calendar:write} stays admin-bound.
  *
- * <p>Multi-calendar mode: when {@code fromConfig} sees
- * {@code additionalCollections}, the service spawns one extra
- * {@link CalDavClient} per URI (same credentials) and
- * {@link #findInRange} fans out across all of them, colour-stamping
- * each Entry by source. Writes still target the primary collection
- * for new entries; existing entries write back to whichever URI
- * their {@code caldavHref} points at — so dragging an Apple Work
- * event keeps it in the Work calendar.
+ * <p>Multi-server mode: {@link #fromConnections} is the canonical
+ * factory — every {@link CalendarSubscription} pairs with its
+ * owning {@link CalDavServerConnection} via {@code serverId} and
+ * spawns one {@link CalDavClient}. {@link #findInRange} fans out
+ * across all of them in parallel, colour-stamping each Entry by
+ * source. Writes still target the primary collection for new
+ * entries; existing entries write back to whichever URI their
+ * {@code caldavHref} points at — so dragging an Apple Work event
+ * keeps it in the Work calendar.
  */
 public final class CalendarService implements HasLogger {
 
@@ -100,20 +101,6 @@ public final class CalendarService implements HasLogger {
 
   public CalendarService(URI collectionUri) {
     this(new CalDavClient(collectionUri), ZoneId.systemDefault());
-  }
-
-  public static CalendarService fromConfig(CalDavConnectionConfig config,
-                                           ZoneId displayZone) {
-    CalDavConnectionConfig n = config.normalised();
-    CalDavClient primary = buildClient(n.collectionUri(), n);
-    List<CalDavClient> read = new ArrayList<>();
-    read.add(primary);
-    for (URI extra : n.additionalCollections()) {
-      if (extra != null && !extra.equals(n.collectionUri())) {
-        read.add(buildClient(extra, n));
-      }
-    }
-    return new CalendarService(primary, read, displayZone);
   }
 
   /**
@@ -147,12 +134,6 @@ public final class CalendarService implements HasLogger {
       if (primary == null) primary = client;
     }
     return new CalendarService(primary, clients, displayZone);
-  }
-
-  private static CalDavClient buildClient(URI uri, CalDavConnectionConfig auth) {
-    return auth.hasAuth()
-        ? new CalDavClient(uri, auth.username(), auth.password())
-        : new CalDavClient(uri);
   }
 
   public CalendarService(CalDavClient client, ZoneId displayZone) {

@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -35,13 +34,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 @DisplayName("VaadinSessionCalendarStateStore — no-session fallback behaviour")
 class VaadinSessionCalendarStateStoreTest {
-
-  @Test
-  @DisplayName("readConnection returns empty when no VaadinSession is bound")
-  void readConnectionNoSession() {
-    VaadinSessionCalendarStateStore store = new VaadinSessionCalendarStateStore();
-    assertEquals(Optional.empty(), store.readConnection());
-  }
 
   @Test
   @DisplayName("readServers / readSubscriptions yield empty lists without a session")
@@ -75,12 +67,10 @@ class VaadinSessionCalendarStateStoreTest {
   }
 
   @Test
-  @DisplayName("public SESSION_KEY constants match the legacy strings")
+  @DisplayName("public SESSION_KEY constants match the expected attribute names")
   void sessionKeyConstants() {
     // Critical: the BrowserlessTest fixtures poke these keys directly.
     // Drift would silently desync test setup from store reads.
-    assertEquals("calendar.connection.config",
-        VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION);
     assertEquals("calendar.subscriptions",
         VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS);
     assertEquals("calendar.servers",

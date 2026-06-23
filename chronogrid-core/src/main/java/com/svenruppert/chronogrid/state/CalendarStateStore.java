@@ -41,7 +41,6 @@ package com.svenruppert.chronogrid.state;
  * #L%
  */
 
-import com.svenruppert.chronogrid.service.CalDavConnectionConfig;
 import com.svenruppert.chronogrid.service.CalDavServerConnection;
 import com.svenruppert.chronogrid.service.CalendarSubscription;
 
@@ -51,8 +50,9 @@ import java.util.Set;
 
 /**
  * Per-user state the {@code ChronoGrid} keeps between navigations:
- * the active CalDAV connection config, the list of configured
- * servers and subscriptions, and the N-days slider preference.
+ * the list of configured servers + subscriptions, the N-days slider
+ * preference, the focal day, tag filter and per-entry colour
+ * fall-backs.
  *
  * <p>The view reads/writes state through this interface only — no
  * direct {@code VaadinSession.getAttribute(...)} calls live in the
@@ -62,14 +62,9 @@ import java.util.Set;
  * implementing this contract.
  *
  * <p>The default implementation {@link VaadinSessionCalendarStateStore}
- * preserves the legacy attribute-key behaviour bit-for-bit and is
- * wired in by {@code ChronoGrid}'s no-arg constructor.
+ * is wired in by {@code ChronoGrid}'s no-arg constructor.
  */
 public interface CalendarStateStore {
-
-  Optional<CalDavConnectionConfig> readConnection();
-
-  void writeConnection(CalDavConnectionConfig cfg);
 
   List<CalDavServerConnection> readServers();
 

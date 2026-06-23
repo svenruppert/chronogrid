@@ -16,7 +16,6 @@
 
 package com.svenruppert.chronogrid.state;
 
-import com.svenruppert.chronogrid.service.CalDavConnectionConfig;
 import com.svenruppert.chronogrid.service.CalDavServerConnection;
 import com.svenruppert.chronogrid.service.CalendarSubscription;
 import com.vaadin.flow.server.VaadinSession;
@@ -24,46 +23,26 @@ import com.vaadin.flow.server.VaadinSession;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Default {@link CalendarStateStore} backed by the current
  * {@link VaadinSession}. Survives navigation but resets on logout —
  * the historical demo behaviour.
  *
- * <p>The session-attribute keys exposed as public constants are the
- * project-wide contract: Browserless tests poke them directly to
- * seed and clear state between scenarios, so the values here MUST
- * agree with whatever the legacy {@code ChronoGrid.SESSION_KEY_*}
- * re-exports point at.
+ * <p>The session-attribute keys are public constants so Browserless
+ * tests can poke them directly to seed scenarios.
  */
 public final class VaadinSessionCalendarStateStore
     implements CalendarStateStore, Serializable {
 
   private static final long serialVersionUID = 1L;
 
-  public static final String SESSION_KEY_CONNECTION = "calendar.connection.config";
   public static final String SESSION_KEY_SUBSCRIPTIONS = "calendar.subscriptions";
   public static final String SESSION_KEY_SERVERS = "calendar.servers";
   public static final String SESSION_KEY_NDAYS = "calendar.nav.nDays";
   public static final String SESSION_KEY_TAG_FILTER = "calendar.tagFilter";
   public static final String SESSION_KEY_ENTRY_COLOURS = "calendar.entryColours";
   public static final String SESSION_KEY_FOCAL_DAY = "calendar.nav.focalDay";
-
-  @Override
-  public Optional<CalDavConnectionConfig> readConnection() {
-    VaadinSession session = VaadinSession.getCurrent();
-    if (session == null) return Optional.empty();
-    Object raw = session.getAttribute(SESSION_KEY_CONNECTION);
-    return raw instanceof CalDavConnectionConfig c
-        ? Optional.of(c) : Optional.empty();
-  }
-
-  @Override
-  public void writeConnection(CalDavConnectionConfig cfg) {
-    VaadinSession session = VaadinSession.getCurrent();
-    if (session != null) session.setAttribute(SESSION_KEY_CONNECTION, cfg);
-  }
 
   @Override
   public List<CalDavServerConnection> readServers() {

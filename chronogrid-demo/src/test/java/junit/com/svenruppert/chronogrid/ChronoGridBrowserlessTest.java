@@ -18,7 +18,6 @@ package junit.com.svenruppert.chronogrid;
 
 import com.svenruppert.caldav.testsupport.CalDavFixture;
 import com.svenruppert.chronogrid.client.CalDavClient;
-import com.svenruppert.chronogrid.service.CalDavConnectionConfig;
 import com.svenruppert.chronogrid.service.CalDavServerConnection;
 import com.svenruppert.chronogrid.service.CalendarService;
 import com.svenruppert.chronogrid.service.CalendarSubscription;
@@ -76,14 +75,16 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
     fixture.interactions().clear();
     VaadinSession session = VaadinSession.getCurrent();
     if (session != null) {
-      // Seed the connection config to point at the testbench so the
-      // no-arg ChronoGrid ctor's default fallback (which used to go
-      // through CalendarServiceProvider) lands on the fixture and not
-      // the bundled iCloud preset URL.
+      // Seed a single anonymous subscription pointing at the
+      // testbench so the no-arg ChronoGrid ctor's default service
+      // lands on the fixture and not on the bundled iCloud preset
+      // URL. Tests that need a different setup override the
+      // SUBSCRIPTIONS/SERVERS attributes themselves before
+      // navigating.
       URI collection = fixture.baseUri().resolve("/calendars/personal/");
-      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION,
-          CalDavConnectionConfig.anonymous(collection));
-      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS, null);
+      session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
+          List.of(new CalendarSubscription(collection,
+              "Testbench", "#1F77B4", true, null)));
       session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_SERVERS, null);
       session.setAttribute(VaadinSessionCalendarStateStore.SESSION_KEY_NDAYS, null);
     }
@@ -179,12 +180,16 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
-  @DisplayName("badge shows DISCONNECTED when the backend is unreachable")
+  @DisplayName("badge shows DISCONNECTED when the only configured backend is unreachable")
   void badgeFlipsToDisconnectedOnIoFailure() {
+    // Override the default fixture subscription with one that
+    // points at a closed port — when every client fails, the badge
+    // must flip to DISCONNECTED.
+    URI dead = URI.create("http://127.0.0.1:1/calendars/nonexistent/");
     VaadinSession.getCurrent().setAttribute(
-        VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION,
-        CalDavConnectionConfig.anonymous(
-            URI.create("http://127.0.0.1:1/calendars/nonexistent/")));
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
+        List.of(new CalendarSubscription(dead, "Phantom",
+            "#FF0000", true, null)));
 
     AppUser user = new AppUser(71L, "Offline User",
         EnumSet.of(AuthorizationRole.USER));
@@ -599,97 +604,12 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
             + "got tokens " + nums + " from \"" + text + "\"");
   }
 
-  @Test
-  @DisplayName("Planning-Feature #7 Schicht 5: legacy single-server connection auto-migrates to server + subscription on mount")
-  void legacyConnectionAutoMigratesOnMount() {
-    AppUser user = new AppUser(95L, "Migration User",
-        EnumSet.of(AuthorizationRole.USER));
-    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
-
-    // Pre-Schicht-5: a legacy session held only the single-server
-    // CalDavConnectionConfig. After mount, the migration must
-    // produce one server + one subscription (and the legacy key
-    // must remain intact for rollback-safety).
-    URI legacyUri = URI.create("https://caldav.example/legacy/cal/");
-    VaadinSession.getCurrent().setAttribute(
-        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
-            .SESSION_KEY_CONNECTION,
-        new com.svenruppert.chronogrid.service.CalDavConnectionConfig(
-            legacyUri, "alice", "secret"));
-    // No SESSION_KEY_SERVERS, no SESSION_KEY_SUBSCRIPTIONS — only
-    // the legacy key is present, which is exactly the pre-migration
-    // state shape.
-
-    navigate(CalendarRouteView.class);
-
-    java.util.List<com.svenruppert.chronogrid.service.CalDavServerConnection>
-        servers = new VaadinSessionCalendarStateStore().readServers();
-    assertEquals(1, servers.size(),
-        "migration must produce exactly one server");
-    assertEquals("alice", servers.get(0).username(),
-        "migrated server must carry the legacy username");
-    assertEquals("secret", servers.get(0).password(),
-        "migrated server must carry the legacy password");
-
-    java.util.List<CalendarSubscription> subs = new VaadinSessionCalendarStateStore().readSubscriptions();
-    assertEquals(1, subs.size(),
-        "migration must produce exactly one subscription");
-    assertEquals(legacyUri, subs.get(0).uri(),
-        "migrated subscription must point at the legacy collection URI");
-    assertEquals(servers.get(0).id(), subs.get(0).serverId(),
-        "migrated subscription must reference the migrated server's id");
-
-    // Rollback-safety: the legacy key MUST still be readable. A
-    // mid-deploy rollback re-mounts the legacy connection without
-    // any data loss.
-    assertNotNull(VaadinSession.getCurrent().getAttribute(
-        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
-            .SESSION_KEY_CONNECTION),
-        "Schicht 5 must NOT delete the legacy connection key — "
-            + "it stays readable as a rollback-safety net");
-  }
-
-  @Test
-  @DisplayName("Planning-Feature #7 Schicht 5: migration is a no-op when multi-server state already exists")
-  void legacyMigrationIsNoOpWhenMultiServerStateExists() {
-    AppUser user = new AppUser(96L, "Already-Migrated User",
-        EnumSet.of(AuthorizationRole.USER));
-    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
-
-    // BOTH the legacy key AND existing multi-server state — the
-    // migration must defer to the multi-server state and leave it
-    // untouched. Otherwise a re-mount could clobber subscriptions
-    // the user just added.
-    URI legacyUri = URI.create("https://caldav.example/legacy/");
-    VaadinSession.getCurrent().setAttribute(
-        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
-            .SESSION_KEY_CONNECTION,
-        new com.svenruppert.chronogrid.service.CalDavConnectionConfig(
-            legacyUri, "alice", "secret"));
-    URI existingSub = URI.create("https://caldav.example/multi/cal/");
-    String existingServerId = "existing-srv";
-    VaadinSession.getCurrent().setAttribute(
-        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
-            .SESSION_KEY_SERVERS,
-        java.util.List.of(new com.svenruppert.chronogrid.service.CalDavServerConnection(
-            existingServerId, "Already here",
-            URI.create("https://caldav.example/multi/"), "bob", "pw")));
-    VaadinSession.getCurrent().setAttribute(
-        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
-        java.util.List.of(new CalendarSubscription(existingSub,
-            "Already", "#FF0000", true, existingServerId)));
-
-    navigate(CalendarRouteView.class);
-
-    java.util.List<com.svenruppert.chronogrid.service.CalDavServerConnection>
-        servers = new VaadinSessionCalendarStateStore().readServers();
-    assertEquals(1, servers.size(),
-        "no-op migration must leave server count at 1 (the pre-existing one)");
-    assertEquals(existingServerId, servers.get(0).id(),
-        "migration must not replace the pre-existing server entry");
-    assertEquals(1, new VaadinSessionCalendarStateStore().readSubscriptions().size(),
-        "no-op migration must leave subscription count at 1");
-  }
+  // legacyConnectionAutoMigratesOnMount + legacyMigrationIsNoOpWhenMultiServerStateExists
+  // removed: the legacy SESSION_KEY_CONNECTION path is gone with the
+  // full-legacy-eradication cleanup. ChronoGrid no longer reads or
+  // writes the single-server config; the auto-migration that lived
+  // here ran once at ship time of the Connection-Manager refactor
+  // and is no longer relevant.
 
   @Test
   @DisplayName("Planning-Feature #7 Schicht 2: hybrid default-visibility threshold is 5")
@@ -732,12 +652,13 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
-  @DisplayName("session-stored CalDavConnectionConfig overrides the provider default at attach time")
+  @DisplayName("session-stored subscription overrides the default fixture seed at attach time")
   void sessionAttributeOverridesProviderDefault() throws IOException {
     URI overrideUri = URI.create("http://127.0.0.1:1/calendars/nonexistent/");
     VaadinSession.getCurrent().setAttribute(
-        VaadinSessionCalendarStateStore.SESSION_KEY_CONNECTION,
-        CalDavConnectionConfig.anonymous(overrideUri));
+        VaadinSessionCalendarStateStore.SESSION_KEY_SUBSCRIPTIONS,
+        List.of(new CalendarSubscription(overrideUri, "Phantom",
+            "#FF0000", true, null)));
 
     AppUser user = new AppUser(61L, "Override User",
         EnumSet.of(AuthorizationRole.USER));
@@ -747,15 +668,10 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
 
     long preReports = fixture.interactions().entries().stream()
         .filter(e -> "REPORT".equals(e.method())).count();
-    try {
-      findFullCalendar().getEntryProvider().fetch(
-          java.time.LocalDateTime.now().minusDays(1),
-          java.time.LocalDateTime.now().plusDays(1))
-          .toList();
-    } catch (RuntimeException expected) {
-      // expected — port 1 is closed; the point is the request did NOT
-      // hit the fixture below.
-    }
+    findFullCalendar().getEntryProvider().fetch(
+        java.time.LocalDateTime.now().minusDays(1),
+        java.time.LocalDateTime.now().plusDays(1))
+        .toList();
     long postReports = fixture.interactions().entries().stream()
         .filter(e -> "REPORT".equals(e.method())).count();
     assertEquals(preReports, postReports,

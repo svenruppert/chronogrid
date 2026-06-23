@@ -41,7 +41,6 @@ package junit.com.svenruppert.chronogrid.state;
  * #L%
  */
 
-import com.svenruppert.chronogrid.service.CalDavConnectionConfig;
 import com.svenruppert.chronogrid.service.CalDavServerConnection;
 import com.svenruppert.chronogrid.service.CalendarSubscription;
 import com.svenruppert.chronogrid.state.CalendarStateStore;
@@ -51,7 +50,6 @@ import org.junit.jupiter.api.Test;
 import java.net.URI;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -69,22 +67,6 @@ class CalendarStateStoreTest {
 
   private static CalendarStateStore newStore() {
     return new InMemoryStore();
-  }
-
-  @Test
-  @DisplayName("readConnection returns empty when nothing is written")
-  void connectionEmptyByDefault() {
-    CalendarStateStore store = newStore();
-    assertEquals(Optional.empty(), store.readConnection());
-  }
-
-  @Test
-  @DisplayName("writeConnection then readConnection round-trips the same config")
-  void connectionRoundTrip() {
-    CalendarStateStore store = newStore();
-    CalDavConnectionConfig cfg = CalDavConnectionConfig.anonymous(URI_ONE);
-    store.writeConnection(cfg);
-    assertEquals(Optional.of(cfg), store.readConnection());
   }
 
   @Test
@@ -146,10 +128,6 @@ class CalendarStateStoreTest {
     // writeFocalDay should still answer reads with the fallback — the
     // contract is opt-in for the persistence behaviour.
     CalendarStateStore bare = new CalendarStateStore() {
-      @Override public Optional<CalDavConnectionConfig> readConnection() {
-        return Optional.empty();
-      }
-      @Override public void writeConnection(CalDavConnectionConfig cfg) { }
       @Override public List<CalDavServerConnection> readServers() {
         return List.of();
       }
@@ -183,18 +161,11 @@ class CalendarStateStoreTest {
   // ── in-memory fixture (one of two reference impls for the contract) ──
 
   private static final class InMemoryStore implements CalendarStateStore {
-    private CalDavConnectionConfig connection;
     private List<CalDavServerConnection> servers = List.of();
     private List<CalendarSubscription> subscriptions = List.of();
     private Integer nDays;
     private LocalDate focalDay;
 
-    @Override public Optional<CalDavConnectionConfig> readConnection() {
-      return Optional.ofNullable(connection);
-    }
-    @Override public void writeConnection(CalDavConnectionConfig cfg) {
-      this.connection = cfg;
-    }
     @Override public List<CalDavServerConnection> readServers() {
       return servers;
     }
