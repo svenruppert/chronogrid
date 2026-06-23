@@ -135,6 +135,49 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("BACKLOG-#9 follow-up: badge stays CONNECTED in partial-failure mode (one server up, one server down)")
+  void badgeStaysConnectedInPartialFailureMode() {
+    AppUser user = new AppUser(74L, "Partial User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    URI liveUri = fixture.baseUri().resolve("/calendars/personal/");
+    URI deadUri = URI.create("http://127.0.0.1:1/calendars/none/");
+    com.svenruppert.chronogrid.service.CalDavServerConnection liveServer =
+        com.svenruppert.chronogrid.service.CalDavServerConnection.create(
+            "Testbench", fixture.baseUri(), null, null);
+    com.svenruppert.chronogrid.service.CalDavServerConnection deadServer =
+        com.svenruppert.chronogrid.service.CalDavServerConnection.create(
+            "Offline", URI.create("http://127.0.0.1:1/"), null, null);
+    VaadinSession.getCurrent().setAttribute(
+        ChronoGrid.SESSION_KEY_SERVERS,
+        java.util.List.of(liveServer, deadServer));
+    VaadinSession.getCurrent().setAttribute(
+        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        java.util.List.of(
+            new CalendarSubscription(liveUri, "Personal", "#1F77B4",
+                true, liveServer.id()),
+            new CalendarSubscription(deadUri, "Phantom", "#FF0000",
+                true, deadServer.id())));
+
+    navigate(CalendarRouteView.class);
+    ChronoGrid view = findCalendarView();
+
+    findFullCalendar().getEntryProvider().fetch(
+        java.time.LocalDateTime.now().minusDays(1),
+        java.time.LocalDateTime.now().plusDays(1))
+        .toList();
+    // With one of two clients failing, the surviving live client
+    // keeps the badge on CONNECTED — partial-failure isolation in
+    // action. The user sees a per-failure toast for the dead one
+    // (not assertable in BrowserlessTest, but the markConnected
+    // path is the contract here).
+    assertEquals(ChronoGrid.ConnectionState.CONNECTED, view.connectionState(),
+        "with one client up and one down, the badge must stay CONNECTED "
+            + "(BACKLOG-#9 follow-up: partial-failure isolation)");
+  }
+
+  @Test
   @DisplayName("badge shows DISCONNECTED when the backend is unreachable")
   void badgeFlipsToDisconnectedOnIoFailure() {
     VaadinSession.getCurrent().setAttribute(

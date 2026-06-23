@@ -111,6 +111,63 @@ class CalendarServiceResultTest {
   }
 
   @Test
+  @DisplayName("BACKLOG-#9 follow-up: findInRangeWithStatus survives one failing client and returns the surviving entries + a per-failure CalDavError")
+  void mixedClientsYieldPartialSuccess() throws Exception {
+    // Seed one event on the live testbench so the live client has
+    // something to return — otherwise the test couldn't distinguish
+    // "live succeeded with 0 entries" from "live also failed".
+    String uid = "partial-fail-" + UUID.randomUUID();
+    fixture.putEvent("personal", uid + ".ics",
+        com.svenruppert.caldav.testsupport.IcalFixtures.event(uid)
+            .summary("survivor")
+            .starts(java.time.Instant.parse("2026-06-15T10:00:00Z"))
+            .ends(java.time.Instant.parse("2026-06-15T11:00:00Z")));
+
+    URI liveUri = fixture.baseUri().resolve("/calendars/personal/");
+    URI deadUri = URI.create("http://127.0.0.1:1/calendars/none/");
+    CalDavClient live = new CalDavClient(liveUri);
+    CalDavClient dead = new CalDavClient(deadUri);
+    CalendarService mixed = new CalendarService(
+        live, java.util.List.of(live, dead), java.time.ZoneOffset.UTC);
+
+    com.svenruppert.chronogrid.service.FanOutOutcome outcome =
+        mixed.findInRangeWithStatus(
+            LocalDateTime.of(2026, Month.JUNE, 1, 0, 0),
+            LocalDateTime.of(2026, Month.JULY, 1, 0, 0));
+
+    assertTrue(outcome.hasFailures(),
+        "dead client at port 1 must surface as a failure entry");
+    assertEquals(1, outcome.failures().size(),
+        "exactly one client failed");
+    assertEquals(CalDavErrors.Kind.NETWORK,
+        outcome.failures().get(deadUri).kind(),
+        "ConnectException at port 1 must classify as NETWORK");
+    // The live client's entry must survive the dead client's failure
+    // — partial-failure isolation in action.
+    assertTrue(outcome.entries().stream().anyMatch(e -> uid.equals(e.getId())),
+        "live client's seeded event must still surface despite the dead client; "
+            + "got " + outcome.entries().size() + " entries");
+  }
+
+  @Test
+  @DisplayName("BACKLOG-#9 follow-up: legacy findInRange still throws on any client failure (backwards-compat contract)")
+  void legacyFindInRangeStillThrowsOnPartialFailure() throws Exception {
+    URI liveUri = fixture.baseUri().resolve("/calendars/personal/");
+    URI deadUri = URI.create("http://127.0.0.1:1/calendars/none/");
+    CalDavClient live = new CalDavClient(liveUri);
+    CalDavClient dead = new CalDavClient(deadUri);
+    CalendarService mixed = new CalendarService(
+        live, java.util.List.of(live, dead), java.time.ZoneOffset.UTC);
+
+    org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
+        () -> mixed.findInRange(
+            LocalDateTime.of(2026, Month.JUNE, 1, 0, 0),
+            LocalDateTime.of(2026, Month.JULY, 1, 0, 0)).count(),
+        "legacy findInRange must still throw on any client failure — "
+            + "existing callers depend on that contract");
+  }
+
+  @Test
   @DisplayName("saveAsResult new entry → success, refetch returns same UID")
   void saveNewIsSuccess() throws Exception {
     String uid = "result-save-" + UUID.randomUUID();

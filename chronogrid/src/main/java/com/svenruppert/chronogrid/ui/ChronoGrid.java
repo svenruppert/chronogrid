@@ -175,6 +175,8 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_NOTIFY_SERVER_REMOVED = "calendar.notify.serverRemoved";
   private static final String K_NOTIFY_SERVER_NAMED = "calendar.notify.subjectScope.server";
   private static final String K_NOTIFY_CALENDAR_NAMED = "calendar.notify.subjectScope.calendar";
+  // BACKLOG-#9 follow-up: partial-failure-isolated multi-server fetch.
+  private static final String K_NOTIFY_PARTIAL_FAIL = "calendar.notify.partialFail";
   private static final String K_NOTIFY_DISCOVERY_FAIL = "calendar.notify.discoveryFail";
   private static final String K_NOTIFY_DISCOVERY_EMPTY = "calendar.notify.discoveryEmpty";
   private static final String K_NOTIFY_DISCOVERY_FOUND = "calendar.notify.discoveryFound";
@@ -984,7 +986,28 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   private Stream<Entry> rangeWithStatus(LocalDateTime from, LocalDateTime to) {
     try {
-      var fetched = this.service.findInRange(from, to).toList();
+      // BACKLOG-#9 follow-up — partial-failure isolation. A single
+      // 5xx-replying or hanging server no longer wipes the whole
+      // refresh; the surviving servers' entries surface, and the
+      // failing ones produce one user-visible toast each via
+      // surfacePartialFailures. The connection badge only flips to
+      // DISCONNECTED when ALL clients failed; any surviving client
+      // keeps the badge on CONNECTED to communicate "partial mode"
+      // (the per-failure toasts then identify the affected servers).
+      com.svenruppert.chronogrid.service.FanOutOutcome outcome =
+          this.service.findInRangeWithStatus(from, to);
+      if (outcome.hasFailures()) surfacePartialFailures(outcome);
+      java.util.List<Entry> fetched = outcome.entries();
+      int totalClients = Math.max(1, stateStore.readSubscriptions().size());
+      if (outcome.failures().size() >= totalClients) {
+        // Every client failed — surface as a hard disconnect on the
+        // badge so the user sees the overall state, not just the
+        // per-server toasts.
+        com.svenruppert.chronogrid.client.CalDavError first =
+            outcome.failures().values().iterator().next();
+        markDisconnected(shortReason(first.cause()));
+        return Stream.empty();
+      }
       markConnected();
       java.util.Set<URI> visible = visibleUris();
       java.util.Map<URI, String> colorByCollection = colorBySubscriptionUri();
@@ -1048,6 +1071,42 @@ public class ChronoGrid extends Composite<VerticalLayout>
           service.collectionUri(), ex.toString());
       markDisconnected(shortReason(ex));
       return Stream.empty();
+    }
+  }
+
+  /**
+   * BACKLOG-#9 follow-up — render one {@code notifyError} per failed
+   * client, naming the affected server via
+   * {@link #serverScopeHint(String)}. The user therefore sees, e.g.,
+   * "Could not reach calendar: Connection refused [Nextcloud]" while
+   * the surviving servers' events still surface in the grid.
+   *
+   * <p>De-duplication: each call fires one toast per failed URI.
+   * The Vaadin FullCalendar EntryProvider typically fires one query
+   * per refresh, so duplicates are rare; if a refresh splits the
+   * visible range into multiple sub-queries we accept a few
+   * duplicates rather than introducing per-UI state. A future
+   * follow-up could add a short-window suppression set if telemetry
+   * reports it as noisy.
+   */
+  private void surfacePartialFailures(
+      com.svenruppert.chronogrid.service.FanOutOutcome outcome) {
+    java.util.List<CalendarSubscription> subs = stateStore.readSubscriptions();
+    for (java.util.Map.Entry<URI,
+        com.svenruppert.chronogrid.client.CalDavError> entry
+        : outcome.failures().entrySet()) {
+      URI failedUri = entry.getKey();
+      com.svenruppert.chronogrid.client.CalDavError err = entry.getValue();
+      String serverId = subs.stream()
+          .filter(s -> s.uri().equals(failedUri))
+          .findFirst()
+          .map(CalendarSubscription::serverId)
+          .orElse(null);
+      logger().info("partial-failure fan-out client {}: {}",
+          failedUri, err.detail());
+      notifyError(messages.tr(K_NOTIFY_PARTIAL_FAIL,
+          "Could not reach calendar: {0}",
+          friendlyError(err.cause())) + serverScopeHint(serverId));
     }
   }
 

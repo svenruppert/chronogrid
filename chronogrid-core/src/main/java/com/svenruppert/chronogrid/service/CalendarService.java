@@ -189,6 +189,34 @@ public final class CalendarService implements HasLogger {
   }
 
   /**
+   * BACKLOG-#9 follow-up — partial-failure-isolated read.
+   *
+   * <p>Same semantics as {@link #findInRange(LocalDateTime, LocalDateTime)}
+   * except that a per-client failure does <strong>not</strong>
+   * propagate. The returned {@link FanOutOutcome} carries entries
+   * from every surviving client plus a {@code Map<URI, CalDavError>}
+   * for the clients that threw. The caller — typically the UI —
+   * decides whether to surface the failures (status-aware
+   * notifications) or treat them as a hard error.
+   *
+   * <p>One hanging or 5xx-replying server therefore no longer blocks
+   * the other servers' refresh: the user sees four servers' events
+   * plus a single "server X is offline" toast instead of a
+   * complete refresh-failed notification.
+   */
+  public FanOutOutcome findInRangeWithStatus(LocalDateTime from, LocalDateTime to) {
+    Instant fromUtc = from.atZone(displayZone).toInstant();
+    Instant toUtc = to.atZone(displayZone).toInstant();
+    return fanOutWithStatus(client -> client.findInRange(fromUtc, toUtc));
+  }
+
+  public FanOutOutcome findTodosInRangeWithStatus(LocalDateTime from, LocalDateTime to) {
+    Instant fromUtc = from.atZone(displayZone).toInstant();
+    Instant toUtc = to.atZone(displayZone).toInstant();
+    return fanOutWithStatus(client -> client.findTodosInRange(fromUtc, toUtc));
+  }
+
+  /**
    * Planning-Feature #8 — parallel fan-out across all read clients.
    *
    * <p>Pre-Feature-#8 this loop was strictly sequential: 5 servers
@@ -215,7 +243,49 @@ public final class CalendarService implements HasLogger {
    * notifications). Until then, "any client fails → fan-out fails"
    * stays the contract.
    */
+  /**
+   * Legacy throw-on-any-failure variant. Kept on the
+   * {@link #findInRange(LocalDateTime, LocalDateTime)} +
+   * {@link #findTodosInRange(LocalDateTime, LocalDateTime)} hot path
+   * so existing callers (and their tests) see the unchanged contract.
+   *
+   * <p>Internally delegates to {@link #fanOutWithStatus} and throws
+   * the first failure's underlying {@link RuntimeException} if any
+   * client failed. Callers that want graceful degradation should
+   * use {@link #findInRangeWithStatus} / {@link #findTodosInRangeWithStatus}
+   * instead.
+   */
   private Stream<Entry> fanOut(
+      java.util.function.Function<CalDavClient, List<RemoteEvent>> op) {
+    FanOutOutcome outcome = fanOutWithStatus(op);
+    if (outcome.hasFailures()) {
+      Throwable cause = outcome.failures().values().iterator().next().cause();
+      if (cause instanceof RuntimeException re) throw re;
+      throw new RuntimeException(cause);
+    }
+    return outcome.entries().stream();
+  }
+
+  /**
+   * BACKLOG-#9 follow-up — parallel fan-out that <strong>collects</strong>
+   * per-client failures instead of aborting on the first one.
+   *
+   * <p>Same parallel architecture as the pre-Feature-#8 fanOut:
+   * one {@link java.util.concurrent.CompletableFuture} per
+   * {@link CalDavClient} against
+   * {@link java.util.concurrent.ForkJoinPool#commonPool()}; per-client
+   * private {@code ArrayList<Entry>}; colour lookup pre-snapshotted
+   * before any worker starts.
+   *
+   * <p>The change versus the legacy {@link #fanOut} is the failure
+   * handling: every per-client {@code CompletableFuture} is wrapped
+   * with {@code handle()} so an exception becomes a
+   * {@code CalDavError} entry in the outcome's failures map rather
+   * than a thrown {@link java.util.concurrent.CompletionException}.
+   * {@code allOf().join()} therefore returns cleanly even when some
+   * clients failed.
+   */
+  private FanOutOutcome fanOutWithStatus(
       java.util.function.Function<CalDavClient, List<RemoteEvent>> op) {
     Map<URI, String> colourByUri = new HashMap<>(readClients.size());
     for (CalDavClient c : readClients) {
@@ -223,42 +293,64 @@ public final class CalendarService implements HasLogger {
           PALETTE[Math.floorMod(c.collectionUri().hashCode(), PALETTE.length)]);
     }
 
-    List<java.util.concurrent.CompletableFuture<List<Entry>>> futures =
+    record PerClient(URI uri, List<Entry> entries,
+                     com.svenruppert.chronogrid.client.CalDavError error) { }
+
+    List<java.util.concurrent.CompletableFuture<PerClient>> futures =
         new ArrayList<>(readClients.size());
     for (CalDavClient client : readClients) {
-      futures.add(java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-        List<Entry> perClient = new ArrayList<>();
-        String calendarColor = colourByUri.get(client.collectionUri());
-        for (RemoteEvent remote : op.apply(client)) {
-          Entry entry = mapper.toEntry(remote);
-          applyColours(entry, calendarColor);
-          perClient.add(entry);
-        }
-        return perClient;
-      }));
+      URI uri = client.collectionUri();
+      futures.add(java.util.concurrent.CompletableFuture
+          .supplyAsync(() -> {
+            List<Entry> perClient = new ArrayList<>();
+            String calendarColor = colourByUri.get(uri);
+            for (RemoteEvent remote : op.apply(client)) {
+              Entry entry = mapper.toEntry(remote);
+              applyColours(entry, calendarColor);
+              perClient.add(entry);
+            }
+            return new PerClient(uri, perClient, null);
+          })
+          .handle((ok, ex) -> {
+            // handle() catches CompletionException — unwrap to the
+            // original cause when present, otherwise pass the raw
+            // throwable. ok is null on the exception branch.
+            if (ex != null) {
+              Throwable cause = ex instanceof java.util.concurrent.CompletionException ce
+                  && ce.getCause() != null ? ce.getCause() : ex;
+              return new PerClient(uri, List.of(),
+                  com.svenruppert.chronogrid.client.CalDavError.of(cause));
+            }
+            return ok;
+          }));
     }
 
-    try {
-      java.util.concurrent.CompletableFuture
-          .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
-          .join();
-    } catch (java.util.concurrent.CompletionException ce) {
-      Throwable cause = ce.getCause();
-      if (cause instanceof RuntimeException re) throw re;
-      throw ce;
-    }
+    // All futures resolve (handle() ensures none completes
+    // exceptionally), so allOf().join() always returns cleanly.
+    java.util.concurrent.CompletableFuture
+        .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+        .join();
 
-    Stream.Builder<Entry> all = Stream.builder();
-    int total = 0;
-    for (java.util.concurrent.CompletableFuture<List<Entry>> f : futures) {
-      List<Entry> entries = f.getNow(List.of());
-      for (Entry e : entries) all.accept(e);
-      total += entries.size();
+    List<Entry> aggregated = new ArrayList<>();
+    Map<URI, com.svenruppert.chronogrid.client.CalDavError> failures =
+        new java.util.LinkedHashMap<>();
+    int successCount = 0;
+    int failureCount = 0;
+    for (java.util.concurrent.CompletableFuture<PerClient> f : futures) {
+      PerClient pc = f.getNow(null);
+      if (pc == null) continue;
+      if (pc.error() != null) {
+        failures.put(pc.uri(), pc.error());
+        failureCount++;
+      } else {
+        aggregated.addAll(pc.entries());
+        successCount++;
+      }
     }
-    logger().info("fanOut across {} client(s) produced {} entries total "
-        + "(parallel, ForkJoinPool.commonPool)",
-        readClients.size(), total);
-    return all.build();
+    logger().info("fanOut across {} client(s): {} ok, {} failed, "
+        + "{} entries (parallel, ForkJoinPool.commonPool)",
+        readClients.size(), successCount, failureCount, aggregated.size());
+    return new FanOutOutcome(aggregated, failures);
   }
 
   /**

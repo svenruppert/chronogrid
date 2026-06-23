@@ -1061,12 +1061,11 @@ schedule fires is silently swallowed.
 
 ### Risks / open questions
 
-- **Partial-failure isolation.** "Any client throws → fan-out
-  throws" is preserved as the contract today. A future iteration
-  could collect per-client `Result<Stream<Entry>, CalDavError>`
-  and surface failed clients via Feature #8's status-aware
-  notifications instead of aborting the entire refresh — but that
-  changes observable behaviour and needs an explicit design pass.
+- ✅ **Partial-failure isolation.** Shipped as BACKLOG #10
+  (2026-06-23). The new `findInRangeWithStatus` collects per-client
+  `CalDavError`s without aborting the refresh; the legacy
+  `findInRange` keeps the throw-on-any-failure contract for
+  callers (and tests) that depend on it.
 - **No per-server streaming arrival.** Entries from all clients
   surface together once `allOf` completes; a future EntryProvider
   rewrite could push per-client results into the grid as each
@@ -1088,3 +1087,121 @@ schedule fires is silently swallowed.
   parallel fan-out to notify per-completion — straightforward but
   re-uses the per-server streaming arrival hook above. Deferred
   until that lands.
+
+---
+
+## #10 — Partial-failure isolation for multi-server fan-out
+
+**Status:** ✅ shipped 2026-06-23 (follow-up to BACKLOG #9)
+**Filed:** 2026-06-23
+
+### Idea
+
+A single timing-out or 5xx-replying CalDAV server no longer blocks
+the rest of the refresh. The grid shows every surviving server's
+entries; each failing server produces one toast naming the
+affected account, so the user knows exactly which connection
+needs attention. The connection badge only flips to
+"disconnected" when **every** configured client failed.
+
+### Motivation
+
+BACKLOG #9 shipped parallel fan-out but kept the legacy
+all-or-nothing failure contract: any client throwing aborted the
+entire refresh. Once Connection Manager (BACKLOG #8) made
+multi-server setups routine, that contract started actively
+hurting — a single iCloud blip in a 4-account setup wiped four
+calendars off the grid at once.
+
+The fix is graceful degradation. The user almost always prefers
+"three calendars work, one is dimmed out with an error message"
+over "everything is gone, try again." This iteration also
+finalises the BACKLOG #9 risks block by implementing the
+"partial-failure isolation" follow-up listed there.
+
+### Sketch
+
+**New value type.** `FanOutOutcome` (record, in
+`com.svenruppert.chronogrid.service`) carries:
+
+- `List<Entry> entries` — defensively copied, every successful
+  client's already-colour-stamped entries flattened in the same
+  order the legacy `findInRange` produced;
+- `Map<URI, CalDavError> failures` — keyed by failed client's
+  `collectionUri()`, with the existing
+  `CalDavError(kind, detail, cause)` record as the value.
+
+**Service-side change.** A new
+`fanOutWithStatus(op)` reuses the parallel
+`CompletableFuture.supplyAsync` architecture but wraps each
+per-client future with `.handle((ok, ex) → ...)`. An exception
+becomes a `CalDavError` entry on the outcome's failures map
+instead of a thrown `CompletionException`. `allOf().join()` then
+returns cleanly even when some clients failed.
+
+The public API gains
+`findInRangeWithStatus(from, to): FanOutOutcome` and
+`findTodosInRangeWithStatus(...)`. The legacy
+`findInRange / findTodosInRange` keep their
+throw-on-any-failure contract by delegating to
+`fanOutWithStatus` and re-throwing the first failure's cause —
+preserves every existing test and every existing caller.
+
+**UI-side wiring.** `ChronoGrid.rangeWithStatus` switches to
+`findInRangeWithStatus`. On a non-empty failures map:
+
+1. `surfacePartialFailures(outcome)` walks every entry and calls
+   `notifyError("Could not reach calendar: {0}" + serverScopeHint)`
+   for each — the existing serverScopeHint from BACKLOG #8 Schicht
+   4 reuses the `[iCloud]` bracket-suffix convention.
+2. Badge update logic compares
+   `outcome.failures().size() ≥ totalClients`: only then does
+   the badge flip to DISCONNECTED. Otherwise the badge stays
+   CONNECTED — the per-failure toasts now own the "this server
+   is broken" signal.
+
+### Acceptance signals
+
+- ✅ Two-server setup with one server pointing at a closed port:
+  `findInRangeWithStatus` returns 1 failure + the live server's
+  entries; `findInRange` (legacy) still throws on the same setup.
+- ✅ Connection badge stays CONNECTED while at least one server
+  is reachable; only flips to DISCONNECTED when every client
+  failed.
+- ✅ One `notifyError` toast per failed server, with the bracketed
+  server-scope suffix — covered by the new
+  `calendar.notify.partialFail` i18n entry in EN+DE.
+- ✅ `CalendarServiceResultTest`: mixed-live-and-dead-client test
+  surfaces the dead client as a NETWORK kind failure while the
+  live client's seeded event still surfaces in the entries list.
+- ✅ Backwards compatibility: legacy `findInRange` still throws,
+  guarded by an explicit `legacyFindInRangeStillThrowsOnPartialFailure`
+  test.
+
+### Risks / open questions
+
+- **Toast spam.** The Vaadin FullCalendar EntryProvider typically
+  fires one query per refresh, but month-view prefetching can
+  split that into multiple sub-queries. v1 accepts the rare
+  duplicate toast rather than introducing per-UI suppression
+  state. A short-window de-dup set is a low-cost follow-up if
+  telemetry shows it as noisy.
+- **Authoritative client count.** The badge's "all clients
+  failed" check uses `stateStore.readSubscriptions().size()` as
+  the total. That equals the live client count after the BACKLOG
+  #8 Schicht 5 auto-migration, but a stale state-store reading
+  during a Connection-Manager edit could disagree with what
+  `CalendarService.fanOutWithStatus` actually exercised. A
+  future iteration could surface the client count on the
+  `FanOutOutcome` itself.
+- **Per-failure i18n verbosity.** Each toast carries the kind-
+  classified detail string from `CalDavErrors.detail(ex)`. For
+  very technical exceptions (e.g. SSL handshake failures) the
+  text leans engineer-speak. A friendly mapping per
+  `CalDavErrors.Kind` is a UX follow-up.
+- **Failure-state memory.** A server that briefly fails then
+  recovers still produces a one-shot toast on the failing
+  refresh; the next successful refresh emits no "back online"
+  signal. If users ask for it, a session-scoped
+  last-fail-per-server map could drive a "Server X is back
+  online" success toast on recovery.
