@@ -169,6 +169,18 @@
             <scope>test</scope>
         </dependency>
 
+        <!--
+            MockHttpTransport for Planning #9 Schicht 3 — exercises
+            the Google token-refresh path deterministically without
+            hitting accounts.google.com.
+        -->
+        <dependency>
+            <groupId>com.google.http-client</groupId>
+            <artifactId>google-http-client-test</artifactId>
+            <version>1.45.0</version>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

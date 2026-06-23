@@ -60,12 +60,24 @@ public record CalDavServerConnection(String id,
                                      String displayName,
                                      URI baseUri,
                                      String username,
-                                     String password)
+                                     String password,
+                                     com.svenruppert.chronogrid.auth.GoogleOAuthCredentials oauth)
     implements Serializable {
 
   public CalDavServerConnection {
     Objects.requireNonNull(id, "id must not be null");
     Objects.requireNonNull(baseUri, "baseUri must not be null");
+  }
+
+  /**
+   * Backward-compatible constructor — Basic-Auth + anonymous
+   * paths use this; OAuth-secured servers (Planning #9) use the
+   * full constructor with the {@code oauth} parameter or the
+   * static {@link #createOAuth} factory.
+   */
+  public CalDavServerConnection(String id, String displayName, URI baseUri,
+                                String username, String password) {
+    this(id, displayName, baseUri, username, password, null);
   }
 
   public static CalDavServerConnection create(String displayName, URI baseUri,
@@ -75,11 +87,39 @@ public record CalDavServerConnection(String id,
         displayName == null || displayName.isBlank()
             ? defaultDisplayName(baseUri)
             : displayName,
-        baseUri, username, password);
+        baseUri, username, password, null);
+  }
+
+  /**
+   * Planning-Feature #9 — factory for Google-style OAuth servers.
+   * {@code username} stays null (no Basic-Auth), the OAuth
+   * credentials carry the refresh-token + client-config from which
+   * the Wizard built the connection.
+   */
+  public static CalDavServerConnection createOAuth(
+      String displayName, URI baseUri,
+      com.svenruppert.chronogrid.auth.GoogleOAuthCredentials oauth) {
+    Objects.requireNonNull(oauth, "oauth must not be null");
+    return new CalDavServerConnection(
+        UUID.randomUUID().toString(),
+        displayName == null || displayName.isBlank()
+            ? defaultDisplayName(baseUri)
+            : displayName,
+        baseUri, null, null, oauth);
   }
 
   public boolean hasAuth() {
     return username != null && !username.isBlank();
+  }
+
+  /**
+   * Planning-Feature #9 — true when this server uses OAuth instead
+   * of Basic-Auth. The two paths are mutually exclusive:
+   * {@code hasOAuth() && hasAuth()} should never happen — the
+   * factories enforce that contract.
+   */
+  public boolean hasOAuth() {
+    return oauth != null;
   }
 
   private static String defaultDisplayName(URI uri) {

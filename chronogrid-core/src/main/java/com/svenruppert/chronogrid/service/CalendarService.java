@@ -60,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
@@ -109,11 +110,39 @@ public final class CalendarService implements HasLogger {
    * by {@code serverId}); the resulting {@link CalDavClient} uses
    * that server's credentials. Subscriptions without a known server
    * fall back to anonymous (testbench-style).
+   *
+   * <p>This basic-auth-only overload is suitable for setups that
+   * never use OAuth — passing a server with non-null
+   * {@code oauth} credentials throws since no token-refresher was
+   * provided.
    */
   public static CalendarService fromConnections(
       List<CalDavServerConnection> servers,
       List<CalendarSubscription> subscriptions,
       ZoneId displayZone) {
+    return fromConnections(servers, subscriptions, displayZone, null);
+  }
+
+  /**
+   * Planning-Feature #9 — multi-server factory with OAuth support.
+   * For Basic-Auth and anonymous servers the behaviour matches the
+   * legacy overload. For servers carrying
+   * {@link CalDavServerConnection#hasOAuth() OAuth credentials},
+   * the resulting client is built via
+   * {@link CalDavClient#withBearerToken} with a {@link Supplier}
+   * obtained from the {@link com.svenruppert.chronogrid.auth.GoogleTokenRefresher}.
+   *
+   * <p>The refresher's lifetime is owned by the caller (typically
+   * the UI session host). Passing {@code null} disables OAuth —
+   * any server with OAuth credentials then fails fast with
+   * {@link IllegalStateException}, matching the contract of the
+   * legacy overload.
+   */
+  public static CalendarService fromConnections(
+      List<CalDavServerConnection> servers,
+      List<CalendarSubscription> subscriptions,
+      ZoneId displayZone,
+      com.svenruppert.chronogrid.auth.GoogleTokenRefresher tokenRefresher) {
     Map<String, CalDavServerConnection> byId = new HashMap<>();
     for (CalDavServerConnection s : servers) byId.put(s.id(), s);
 
@@ -127,13 +156,33 @@ public final class CalendarService implements HasLogger {
     for (CalendarSubscription sub : subscriptions) {
       CalDavServerConnection server = sub.serverId() == null
           ? null : byId.get(sub.serverId());
-      CalDavClient client = server != null && server.hasAuth()
-          ? new CalDavClient(sub.uri(), server.username(), server.password())
-          : new CalDavClient(sub.uri());
+      CalDavClient client = buildClientFor(sub.uri(), server, tokenRefresher);
       clients.add(client);
       if (primary == null) primary = client;
     }
     return new CalendarService(primary, clients, displayZone);
+  }
+
+  private static CalDavClient buildClientFor(
+      URI subscriptionUri,
+      CalDavServerConnection server,
+      com.svenruppert.chronogrid.auth.GoogleTokenRefresher tokenRefresher) {
+    if (server == null) return new CalDavClient(subscriptionUri);
+    if (server.hasOAuth()) {
+      if (tokenRefresher == null) {
+        throw new IllegalStateException(
+            "Server " + server.id() + " uses OAuth but no "
+                + "GoogleTokenRefresher was supplied to fromConnections — "
+                + "use the 4-arg overload for OAuth-bearing setups.");
+      }
+      Supplier<String> tokens = tokenRefresher.bind(server.oauth(), server.id());
+      return CalDavClient.withBearerToken(subscriptionUri, tokens);
+    }
+    if (server.hasAuth()) {
+      return new CalDavClient(subscriptionUri,
+          server.username(), server.password());
+    }
+    return new CalDavClient(subscriptionUri);
   }
 
   public CalendarService(CalDavClient client, ZoneId displayZone) {

@@ -229,16 +229,24 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private transient volatile java.util.concurrent.ScheduledFuture<?>
       pendingProgressShow;
 
+  /**
+   * Planning-Feature #9 Schicht 3 — caches Google OAuth access
+   * tokens per server and refreshes them transparently when CalDAV
+   * requests need a fresh one. One refresher per ChronoGrid instance;
+   * closed on detach.
+   */
+  private transient com.svenruppert.chronogrid.auth.GoogleTokenRefresher tokenRefresher;
+
   public ChronoGrid() {
     this(new VaadinSessionCalendarStateStore());
   }
 
   public ChronoGrid(CalendarStateStore stateStore) {
-    this(stateStore, null, resolveInitialService(stateStore));
+    this(stateStore, null, (CalendarService) null);
   }
 
   public ChronoGrid(CalendarStateStore stateStore, CalendarMessages messages) {
-    this(stateStore, messages, resolveInitialService(stateStore));
+    this(stateStore, messages, (CalendarService) null);
   }
 
   ChronoGrid(CalendarService service) {
@@ -260,7 +268,12 @@ public class ChronoGrid extends Composite<VerticalLayout>
         : CalendarMessages.fallbackOnly();
     this.connectionBadge = new ConnectionStatusBadge(
         this.messages, this::onReconnect);
-    this.service = service;
+    // Token refresher must exist before the initial service resolves
+    // — an OAuth-bearing session state would otherwise fail fast.
+    this.tokenRefresher = new com.svenruppert.chronogrid.auth.GoogleTokenRefresher();
+    this.service = service != null
+        ? service
+        : resolveInitialService(stateStore, tokenRefresher);
     this.focalDay = stateStore.readFocalDay(LocalDate.now());
 
     VerticalLayout root = getContent();
@@ -399,6 +412,12 @@ public class ChronoGrid extends Composite<VerticalLayout>
       if (progressScheduler != null) {
         progressScheduler.shutdownNow();
         progressScheduler = null;
+      }
+      // Planning-Feature #9 Schicht 3: drop cached OAuth access
+      // tokens + close the shared HttpTransport on detach.
+      if (tokenRefresher != null) {
+        tokenRefresher.close();
+        tokenRefresher = null;
       }
     });
   }
@@ -1394,7 +1413,9 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   // ── state-store-backed config helpers ──────────────────────────
 
-  private static CalendarService resolveInitialService(CalendarStateStore store) {
+  private static CalendarService resolveInitialService(
+      CalendarStateStore store,
+      com.svenruppert.chronogrid.auth.GoogleTokenRefresher tokenRefresher) {
     // Multi-server world: subs + servers are the single source of
     // truth. When the state store has at least one subscription the
     // service is rebuilt from the subscription/server pairing.
@@ -1404,7 +1425,8 @@ public class ChronoGrid extends Composite<VerticalLayout>
     java.util.List<CalendarSubscription> subs = store.readSubscriptions();
     if (!subs.isEmpty()) {
       return CalendarService.fromConnections(
-          store.readServers(), subs, ZoneId.systemDefault());
+          store.readServers(), subs, ZoneId.systemDefault(),
+          tokenRefresher);
     }
     return defaultServiceFromPreset();
   }
@@ -1692,7 +1714,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
       return;
     }
     this.service = CalendarService.fromConnections(
-        stateStore.readServers(), subs, displayZone);
+        stateStore.readServers(), subs, displayZone, tokenRefresher);
     refreshBackendStatus();
   }
 
