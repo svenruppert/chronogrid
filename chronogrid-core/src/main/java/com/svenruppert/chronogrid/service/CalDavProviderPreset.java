@@ -88,5 +88,29 @@ public record CalDavProviderPreset(String id,
           + "any non-Apple client. After entering the credentials, hit "
           + "Discover calendars to pick your calendar.");
 
-  public static final List<CalDavProviderPreset> DEFAULTS = List.of(ICLOUD);
+  /**
+   * Planning-Feature #9. Google Calendar via OAuth 2.0. The
+   * {@code entryUri} is the canonical CalDAV-v2 base path; the
+   * actual {@code <calendar-id>/events} segment is appended by
+   * discovery once the user has signed in and granted the Calendar
+   * scope. The hint is displayed in the wizard's step-2 panel where
+   * a "Sign in with Google" button appears instead of the regular
+   * username + password fields (provider-aware wizard step, comes
+   * with Schicht 4).
+   */
+  public static final CalDavProviderPreset GOOGLE = new CalDavProviderPreset(
+      "google",
+      "Google Calendar",
+      VaadinIcon.GOOGLE_PLUS_SQUARE,
+      "https://apidata.googleusercontent.com/caldav/v2/",
+      "Google Calendar uses OAuth 2.0 — clicking \"Sign in with "
+          + "Google\" opens accounts.google.com in a new tab, you "
+          + "grant ChronoGrid the Calendar scope, and the redirect "
+          + "returns the access token automatically. Note: Google's "
+          + "CalDAV endpoint does NOT support VTODO (tasks live in a "
+          + "separate Google Tasks API), and Google's own Calendar "
+          + "UI ignores per-event COLOR — both are deliberate "
+          + "constraints on Google's side, not ChronoGrid limitations.");
+
+  public static final List<CalDavProviderPreset> DEFAULTS = List.of(ICLOUD, GOOGLE);
 }

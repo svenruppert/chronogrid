@@ -125,6 +125,33 @@
             <version>0.6.8</version>
         </dependency>
 
+        <!--
+            Planning-Feature #9 (Google Calendar via OAuth 2.0):
+            google-oauth-client + google-api-client cover the
+            OAuth-Code → Access-Token exchange, transparent
+            refresh-token handling (Credential#refreshToken()),
+            and the GoogleClientSecrets.load() helper for ingesting
+            Cloud-Console-exported JSON config. The Calendar API
+            SDK itself is NOT pulled in — we stay on the CalDAV
+            wire (variant A per Planning #9), only the auth
+            layer changes from Basic to Bearer.
+        -->
+        <dependency>
+            <groupId>com.google.oauth-client</groupId>
+            <artifactId>google-oauth-client</artifactId>
+            <version>1.36.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.oauth-client</groupId>
+            <artifactId>google-oauth-client-jetty</artifactId>
+            <version>1.36.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.api-client</groupId>
+            <artifactId>google-api-client</artifactId>
+            <version>2.7.0</version>
+        </dependency>
+
         <!-- @SuppressFBWarnings annotations (provided scope is fine) -->
         <dependency>
             <groupId>com.github.spotbugs</groupId>

@@ -95,19 +95,59 @@ public final class CalDavClient implements HasLogger {
   private final URI collectionUri;
   private final HttpClient http;
   private final Duration timeout;
-  private final String authorizationHeader;
+  /**
+   * Per-request authorization-header source. Returning {@code null}
+   * leaves the request anonymous (no {@code Authorization} header).
+   * Static credentials (Basic-Auth) bind a constant supplier; rolling
+   * credentials (Bearer-Auth with refresh-tokens, per Planning #9)
+   * bind a supplier that consults a token cache + refresher.
+   *
+   * <p>The supplier is invoked on <em>every</em> request — that lets
+   * a Bearer-token expiry rollover be transparent to the rest of the
+   * client. Implementations that cache should also surface a 401-
+   * retry hook (handled by {@link #send} when added in Schicht 3).
+   */
+  private final java.util.function.Supplier<String> authorizationHeaderSupplier;
 
   public CalDavClient(URI collectionUri) {
-    this(collectionUri, defaultHttpClient(), Duration.ofSeconds(30), null);
+    this(collectionUri, defaultHttpClient(), Duration.ofSeconds(30),
+        () -> null);
   }
 
   public CalDavClient(URI collectionUri, String username, String password) {
     this(collectionUri, defaultHttpClient(), Duration.ofSeconds(30),
-        buildBasicAuthHeader(username, password));
+        staticHeader(buildBasicAuthHeader(username, password)));
   }
 
   public CalDavClient(URI collectionUri, HttpClient http, Duration timeout) {
-    this(collectionUri, http, timeout, null);
+    this(collectionUri, http, timeout, () -> null);
+  }
+
+  /**
+   * Planning-Feature #9 — Bearer-token variant for Google Calendar
+   * (and any future OAuth-secured CalDAV backend). The supplier is
+   * consulted on every request: it returns the current
+   * {@code Authorization} header value (e.g.
+   * {@code "Bearer ya29.A0..."}) or {@code null} to skip the header.
+   *
+   * <p>The supplier owns its own caching + refresh policy — the
+   * client treats it as an opaque source. Token-expiry detection
+   * + automatic refresh on 401 is wired in Schicht 3 of Planning #9
+   * (the {@code TokenRefresher} service).
+   *
+   * <p>Convenience: pass a supplier that returns just the access
+   * token; the {@code "Bearer "} prefix is added here so callers
+   * don't have to repeat it.
+   */
+  public static CalDavClient withBearerToken(
+      URI collectionUri,
+      java.util.function.Supplier<String> accessTokenSupplier) {
+    java.util.function.Supplier<String> headerSupplier = () -> {
+      String token = accessTokenSupplier.get();
+      return token == null || token.isBlank() ? null : "Bearer " + token;
+    };
+    return new CalDavClient(collectionUri, defaultHttpClient(),
+        Duration.ofSeconds(30), headerSupplier);
   }
 
   private static HttpClient defaultHttpClient() {
@@ -115,7 +155,7 @@ public final class CalDavClient implements HasLogger {
   }
 
   private CalDavClient(URI collectionUri, HttpClient http, Duration timeout,
-                       String authorizationHeader) {
+                       java.util.function.Supplier<String> authorizationHeaderSupplier) {
     if (collectionUri == null) {
       throw new IllegalArgumentException("collectionUri must not be null");
     }
@@ -125,7 +165,13 @@ public final class CalDavClient implements HasLogger {
         : collectionUri.resolve(path + "/");
     this.http = http;
     this.timeout = timeout;
-    this.authorizationHeader = authorizationHeader;
+    this.authorizationHeaderSupplier = authorizationHeaderSupplier == null
+        ? () -> null
+        : authorizationHeaderSupplier;
+  }
+
+  private static java.util.function.Supplier<String> staticHeader(String value) {
+    return () -> value;
   }
 
   private static String buildBasicAuthHeader(String username, String password) {
@@ -267,8 +313,9 @@ public final class CalDavClient implements HasLogger {
     HttpRequest.Builder b = HttpRequest.newBuilder(uri)
         .timeout(timeout)
         .header("User-Agent", USER_AGENT);
-    if (authorizationHeader != null) {
-      b = b.header("Authorization", authorizationHeader);
+    String header = authorizationHeaderSupplier.get();
+    if (header != null && !header.isBlank()) {
+      b = b.header("Authorization", header);
     }
     return b;
   }

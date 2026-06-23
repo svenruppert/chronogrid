@@ -51,6 +51,7 @@ public final class ProviderRegistry {
       new AppleProvider(),
       new NextcloudProvider(),
       new InfomaniakProvider(),
+      new GoogleProvider(),
       new GenericProvider()
   );
 

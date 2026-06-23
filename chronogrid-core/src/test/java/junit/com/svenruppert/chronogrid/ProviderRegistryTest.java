@@ -117,6 +117,47 @@ class ProviderRegistryTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #9: Google URIs resolve via googleusercontent.com hostname")
+  void resolvesGoogle() {
+    assertEquals("google", ProviderRegistry.forUri(URI.create(
+        "https://apidata.googleusercontent.com/caldav/v2/sven%40example.com/events"))
+        .id());
+    assertEquals("google", ProviderRegistry.forUri(URI.create(
+        "https://apidata.googleusercontent.com/caldav/v2/")).id());
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #9: GoogleProvider passes hex through, no marker, blocks VTODOs")
+  void googleQuirks() {
+    CalDavProviderProfile google = ProviderRegistry.forUri(URI.create(
+        "https://apidata.googleusercontent.com/caldav/v2/sven%40example.com/events"));
+    assertEquals("google", google.id());
+    assertEquals("#1F77B4", google.formatColor("#1F77B4"),
+        "Google preserves hex — its CalDAV round-trips the value, its UI ignores it; "
+            + "snap-to-named would lose precision without UI gain");
+    assertEquals("#6bbd88", google.formatColor("#6bbd88"));
+    assertFalse(google.writeDescriptionMarker(),
+        "Google does NOT strip on edit — DESCRIPTION-marker would only "
+            + "add visible noise");
+    assertFalse(google.supportsTodos(),
+        "Google's CalDAV does not support VTODOs (tasks live in Google Tasks API)");
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #9: every non-Google provider keeps the supportsTodos() default = true")
+  void nonGoogleProvidersSupportTodos() {
+    CalDavProviderProfile apple = ProviderRegistry.forUri(URI.create("https://caldav.icloud.com/"));
+    CalDavProviderProfile nc = ProviderRegistry.forUri(URI.create(
+        "https://x.example.com/remote.php/dav/"));
+    CalDavProviderProfile im = ProviderRegistry.forUri(URI.create("https://infomaniak.com/"));
+    CalDavProviderProfile gen = ProviderRegistry.forUri(URI.create("https://x.example.com/"));
+    assertTrue(apple.supportsTodos(), "Apple supports VTODO");
+    assertTrue(nc.supportsTodos(), "Nextcloud supports VTODO");
+    assertTrue(im.supportsTodos(), "Infomaniak supports VTODO");
+    assertTrue(gen.supportsTodos(), "Generic standards-compliant CalDAV supports VTODO");
+  }
+
+  @Test
   @DisplayName("GenericProvider preserves hex + no marker (standards-compliant default)")
   void genericPreservesHexAndNoMarker() {
     CalDavProviderProfile gen = ProviderRegistry.forUri(
@@ -140,5 +181,7 @@ class ProviderRegistryTest {
         URI.create("https://infomaniak.com/")).id());
     assertEquals("generic", ProviderRegistry.forUri(
         URI.create("https://generic.example.org/")).id());
+    assertEquals("google", ProviderRegistry.forUri(URI.create(
+        "https://apidata.googleusercontent.com/caldav/v2/")).id());
   }
 }

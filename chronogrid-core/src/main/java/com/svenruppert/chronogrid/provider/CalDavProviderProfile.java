@@ -114,4 +114,22 @@ public interface CalDavProviderProfile {
   default java.time.ZoneId defaultTimezone() {
     return java.time.ZoneId.systemDefault();
   }
+
+  /**
+   * Planning-Feature #9 hook: whether this provider's CalDAV
+   * endpoint accepts VTODO components. Default is {@code true} for
+   * standards-compliant servers (iCloud, Nextcloud, Infomaniak, any
+   * generic CalDAV target). Returns {@code false} for endpoints
+   * known to reject or silently drop VTODOs — notably Google
+   * Calendar, where VTODO is exclusively the Google Tasks API's
+   * domain and the Calendar CalDAV endpoint rejects with 415 or
+   * silently discards.
+   *
+   * <p>The {@code EventEditorDialog} consults this to dim VTODO-
+   * specific options when the active subscription is on a
+   * VTODO-blind provider.
+   */
+  default boolean supportsTodos() {
+    return true;
+  }
 }

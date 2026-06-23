@@ -136,4 +136,50 @@ class CalDavClientAuthTest {
         Instant.parse("2026-01-02T00:00:00Z"));
     assertNull(lastAuthHeader.get());
   }
+
+  @Test
+  @DisplayName("Planning-Feature #9: withBearerToken sends a Bearer <accessToken> header")
+  void bearerTokenIsSentAsBearerAuth() {
+    lastAuthHeader.set(null);
+    CalDavClient.withBearerToken(baseUri, () -> "ya29.A0AfH6SMBExampleToken")
+        .findInRange(
+            Instant.parse("2026-01-01T00:00:00Z"),
+            Instant.parse("2026-01-02T00:00:00Z"));
+    assertEquals("Bearer ya29.A0AfH6SMBExampleToken", lastAuthHeader.get(),
+        "Bearer-token CalDavClient must prefix the token with \"Bearer \"");
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #9: withBearerToken consults the supplier on every request (rolling tokens)")
+  void bearerSupplierIsConsultedPerRequest() {
+    java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger();
+    CalDavClient client = CalDavClient.withBearerToken(baseUri,
+        () -> "token-" + counter.incrementAndGet());
+    lastAuthHeader.set(null);
+    client.findInRange(Instant.parse("2026-01-01T00:00:00Z"),
+        Instant.parse("2026-01-02T00:00:00Z"));
+    String first = lastAuthHeader.get();
+    lastAuthHeader.set(null);
+    client.findInRange(Instant.parse("2026-01-01T00:00:00Z"),
+        Instant.parse("2026-01-02T00:00:00Z"));
+    String second = lastAuthHeader.get();
+    assertEquals("Bearer token-1", first,
+        "first request must consult supplier once");
+    assertEquals("Bearer token-2", second,
+        "second request must consult supplier again — that's how "
+            + "token refresh becomes transparent to the rest of the client");
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #9: withBearerToken treats null token as anonymous (no header)")
+  void bearerNullTokenIsAnonymous() {
+    lastAuthHeader.set(null);
+    CalDavClient.withBearerToken(baseUri, () -> null)
+        .findInRange(
+            Instant.parse("2026-01-01T00:00:00Z"),
+            Instant.parse("2026-01-02T00:00:00Z"));
+    assertNull(lastAuthHeader.get(),
+        "null token must skip the Authorization header — leaves the "
+            + "request anonymous instead of sending \"Bearer null\"");
+  }
 }

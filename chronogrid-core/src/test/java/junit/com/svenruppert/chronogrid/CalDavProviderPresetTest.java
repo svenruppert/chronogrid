@@ -50,16 +50,44 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@DisplayName("CalDavProviderPreset — DEFAULTS catalogue + iCloud entry")
+@DisplayName("CalDavProviderPreset — DEFAULTS catalogue + iCloud + Google entries")
 class CalDavProviderPresetTest {
 
   @Test
-  @DisplayName("DEFAULTS contains exactly the iCloud preset for this iteration")
-  void defaultsContainIcloud() {
-    assertEquals(1, CalDavProviderPreset.DEFAULTS.size(),
-        "this iteration ships exactly one preset; add a row when more land");
+  @DisplayName("DEFAULTS contains iCloud (index 0) + Google (index 1) presets")
+  void defaultsContainIcloudThenGoogle() {
+    assertEquals(2, CalDavProviderPreset.DEFAULTS.size(),
+        "this iteration ships exactly two presets; add a row when more land");
     assertEquals(CalDavProviderPreset.ICLOUD,
-        CalDavProviderPreset.DEFAULTS.get(0));
+        CalDavProviderPreset.DEFAULTS.get(0),
+        "iCloud must stay at index 0 — companion-blog default per "
+            + "memory project_blog_focus_icloud");
+    assertEquals(CalDavProviderPreset.GOOGLE,
+        CalDavProviderPreset.DEFAULTS.get(1));
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #9: GOOGLE preset uses the canonical CalDAV-v2 base URL")
+  void googleUsesCanonicalCalDavBaseUrl() {
+    assertEquals("https://apidata.googleusercontent.com/caldav/v2/",
+        CalDavProviderPreset.GOOGLE.entryUri());
+    assertEquals("google", CalDavProviderPreset.GOOGLE.id());
+    assertEquals("Google Calendar", CalDavProviderPreset.GOOGLE.label());
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #9: GOOGLE hint mentions OAuth + VTODO + COLOR constraints")
+  void googleHintMentionsConstraints() {
+    String hint = CalDavProviderPreset.GOOGLE.hint();
+    assertTrue(hint.contains("OAuth"),
+        "Google hint must surface that it's OAuth 2.0 — sets the user's "
+            + "expectation that the credentials step looks different");
+    assertTrue(hint.contains("VTODO"),
+        "Google hint must call out the VTODO limitation so users don't "
+            + "lose tasks silently");
+    assertTrue(hint.contains("COLOR"),
+        "Google hint must explain why per-event colour does not show "
+            + "in Google's own UI");
   }
 
   @Test
