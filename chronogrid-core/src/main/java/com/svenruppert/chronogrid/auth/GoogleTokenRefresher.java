@@ -131,6 +131,35 @@ public final class GoogleTokenRefresher implements AutoCloseable {
     return () -> getValidAccessToken(credentials, serverId);
   }
 
+  /**
+   * Planning-Feature #9 Schicht 7 — Bearer-Auth source with
+   * 401-retry support. {@link CalDavClient#withBearerToken(java.net.URI,
+   * com.svenruppert.chronogrid.client.BearerTokenSource)} consumes
+   * this directly. Same per-server cache + refresh path as
+   * {@link #bind(GoogleOAuthCredentials, String)}; difference is
+   * that the {@code onAuthRejected} hook invalidates the cached
+   * access token so the next {@code currentToken} call refreshes.
+   */
+  public com.svenruppert.chronogrid.client.BearerTokenSource bindAsSource(
+      GoogleOAuthCredentials credentials, String serverId) {
+    if (credentials == null) {
+      throw new IllegalArgumentException("credentials must not be null");
+    }
+    if (serverId == null || serverId.isBlank()) {
+      throw new IllegalArgumentException("serverId must not be blank");
+    }
+    return new com.svenruppert.chronogrid.client.BearerTokenSource() {
+      @Override
+      public String currentToken() {
+        return getValidAccessToken(credentials, serverId);
+      }
+      @Override
+      public void onAuthRejected() {
+        invalidate(serverId);
+      }
+    };
+  }
+
   String getValidAccessToken(GoogleOAuthCredentials credentials,
                              String serverId) {
     CachedToken cached = cache.get(serverId);

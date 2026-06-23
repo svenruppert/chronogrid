@@ -141,7 +141,8 @@ class CalDavClientAuthTest {
   @DisplayName("Planning-Feature #9: withBearerToken sends a Bearer <accessToken> header")
   void bearerTokenIsSentAsBearerAuth() {
     lastAuthHeader.set(null);
-    CalDavClient.withBearerToken(baseUri, () -> "ya29.A0AfH6SMBExampleToken")
+    java.util.function.Supplier<String> supplier = () -> "ya29.A0AfH6SMBExampleToken";
+    CalDavClient.withBearerToken(baseUri, supplier)
         .findInRange(
             Instant.parse("2026-01-01T00:00:00Z"),
             Instant.parse("2026-01-02T00:00:00Z"));
@@ -153,8 +154,9 @@ class CalDavClientAuthTest {
   @DisplayName("Planning-Feature #9: withBearerToken consults the supplier on every request (rolling tokens)")
   void bearerSupplierIsConsultedPerRequest() {
     java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger();
-    CalDavClient client = CalDavClient.withBearerToken(baseUri,
-        () -> "token-" + counter.incrementAndGet());
+    java.util.function.Supplier<String> supplier =
+        () -> "token-" + counter.incrementAndGet();
+    CalDavClient client = CalDavClient.withBearerToken(baseUri, supplier);
     lastAuthHeader.set(null);
     client.findInRange(Instant.parse("2026-01-01T00:00:00Z"),
         Instant.parse("2026-01-02T00:00:00Z"));
@@ -171,10 +173,79 @@ class CalDavClientAuthTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #9 Schicht 7: 401 → onAuthRejected + retry once with fresh token")
+  void bearer401TriggersInvalidateAndRetry() throws IOException {
+    // Stand up a single-shot 401-then-200 server so the test can
+    // observe both the invalidate hook firing AND the retry going
+    // out with a fresh token.
+    com.sun.net.httpserver.HttpServer flakyServer =
+        com.sun.net.httpserver.HttpServer.create(
+            new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    java.util.concurrent.atomic.AtomicInteger requestCount =
+        new java.util.concurrent.atomic.AtomicInteger();
+    java.util.concurrent.atomic.AtomicReference<String> firstAuth = new java.util.concurrent.atomic.AtomicReference<>();
+    java.util.concurrent.atomic.AtomicReference<String> secondAuth = new java.util.concurrent.atomic.AtomicReference<>();
+    flakyServer.createContext("/", exchange -> {
+      int n = requestCount.incrementAndGet();
+      String auth = exchange.getRequestHeaders().getFirst("Authorization");
+      if (n == 1) firstAuth.set(auth);
+      else secondAuth.set(auth);
+      if (n == 1) {
+        exchange.sendResponseHeaders(401, -1);
+        exchange.close();
+      } else {
+        String body = "<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\"/>";
+        byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/xml");
+        exchange.sendResponseHeaders(207, bytes.length);
+        exchange.getResponseBody().write(bytes);
+        exchange.close();
+      }
+    });
+    flakyServer.start();
+    URI flakyBase = URI.create("http://127.0.0.1:"
+        + flakyServer.getAddress().getPort() + "/cal/");
+
+    try {
+      java.util.concurrent.atomic.AtomicInteger tokenCounter = new java.util.concurrent.atomic.AtomicInteger();
+      java.util.concurrent.atomic.AtomicInteger invalidateCount = new java.util.concurrent.atomic.AtomicInteger();
+      com.svenruppert.chronogrid.client.BearerTokenSource source =
+          new com.svenruppert.chronogrid.client.BearerTokenSource() {
+            @Override
+            public String currentToken() {
+              return "rolling-token-" + tokenCounter.incrementAndGet();
+            }
+            @Override
+            public void onAuthRejected() {
+              invalidateCount.incrementAndGet();
+            }
+          };
+
+      com.svenruppert.chronogrid.client.CalDavClient.withBearerToken(flakyBase, source)
+          .findInRange(
+              Instant.parse("2026-01-01T00:00:00Z"),
+              Instant.parse("2026-01-02T00:00:00Z"));
+
+      assertEquals(2, requestCount.get(),
+          "401 must trigger exactly one retry (total 2 requests)");
+      assertEquals(1, invalidateCount.get(),
+          "onAuthRejected must fire exactly once before the retry");
+      assertEquals("Bearer rolling-token-1", firstAuth.get(),
+          "first request carries the initial token");
+      assertEquals("Bearer rolling-token-2", secondAuth.get(),
+          "retry carries a freshly-issued token — that's how a "
+              + "revoked-mid-session refresh recovers without a user reauth");
+    } finally {
+      flakyServer.stop(0);
+    }
+  }
+
+  @Test
   @DisplayName("Planning-Feature #9: withBearerToken treats null token as anonymous (no header)")
   void bearerNullTokenIsAnonymous() {
     lastAuthHeader.set(null);
-    CalDavClient.withBearerToken(baseUri, () -> null)
+    java.util.function.Supplier<String> nullSupplier = () -> null;
+    CalDavClient.withBearerToken(baseUri, nullSupplier)
         .findInRange(
             Instant.parse("2026-01-01T00:00:00Z"),
             Instant.parse("2026-01-02T00:00:00Z"));

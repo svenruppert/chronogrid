@@ -108,19 +108,26 @@ public final class CalDavClient implements HasLogger {
    * retry hook (handled by {@link #send} when added in Schicht 3).
    */
   private final java.util.function.Supplier<String> authorizationHeaderSupplier;
+  /**
+   * Planning-Feature #9 Schicht 7 — token source used for 401-retry.
+   * Non-null only on Bearer-Auth clients constructed via
+   * {@link #withBearerToken(URI, BearerTokenSource)} (the
+   * Supplier-based overload wraps with a no-op invalidate).
+   */
+  private final BearerTokenSource bearerTokenSource;
 
   public CalDavClient(URI collectionUri) {
     this(collectionUri, defaultHttpClient(), Duration.ofSeconds(30),
-        () -> null);
+        () -> null, null);
   }
 
   public CalDavClient(URI collectionUri, String username, String password) {
     this(collectionUri, defaultHttpClient(), Duration.ofSeconds(30),
-        staticHeader(buildBasicAuthHeader(username, password)));
+        staticHeader(buildBasicAuthHeader(username, password)), null);
   }
 
   public CalDavClient(URI collectionUri, HttpClient http, Duration timeout) {
-    this(collectionUri, http, timeout, () -> null);
+    this(collectionUri, http, timeout, () -> null, null);
   }
 
   /**
@@ -142,12 +149,35 @@ public final class CalDavClient implements HasLogger {
   public static CalDavClient withBearerToken(
       URI collectionUri,
       java.util.function.Supplier<String> accessTokenSupplier) {
+    return withBearerToken(collectionUri, new BearerTokenSource() {
+      @Override
+      public String currentToken() {
+        return accessTokenSupplier.get();
+      }
+    });
+  }
+
+  /**
+   * Planning-Feature #9 Schicht 7 — Bearer-Auth variant with
+   * <strong>401-retry</strong>. The {@link BearerTokenSource}
+   * provides both the current access token and an
+   * {@link BearerTokenSource#onAuthRejected()} hint the client
+   * fires when the CalDAV server returns 401.
+   *
+   * <p>The retry happens once: if the server still returns 401
+   * after the rebuild with a freshly-issued token, the response
+   * propagates up. Refresh tokens that fail twice in a row are
+   * revoked or stale, not a recoverable race — the user has to
+   * re-run the wizard.
+   */
+  public static CalDavClient withBearerToken(URI collectionUri,
+                                             BearerTokenSource source) {
     java.util.function.Supplier<String> headerSupplier = () -> {
-      String token = accessTokenSupplier.get();
+      String token = source.currentToken();
       return token == null || token.isBlank() ? null : "Bearer " + token;
     };
     return new CalDavClient(collectionUri, defaultHttpClient(),
-        Duration.ofSeconds(30), headerSupplier);
+        Duration.ofSeconds(30), headerSupplier, source);
   }
 
   private static HttpClient defaultHttpClient() {
@@ -155,7 +185,8 @@ public final class CalDavClient implements HasLogger {
   }
 
   private CalDavClient(URI collectionUri, HttpClient http, Duration timeout,
-                       java.util.function.Supplier<String> authorizationHeaderSupplier) {
+                       java.util.function.Supplier<String> authorizationHeaderSupplier,
+                       BearerTokenSource bearerTokenSource) {
     if (collectionUri == null) {
       throw new IllegalArgumentException("collectionUri must not be null");
     }
@@ -168,6 +199,7 @@ public final class CalDavClient implements HasLogger {
     this.authorizationHeaderSupplier = authorizationHeaderSupplier == null
         ? () -> null
         : authorizationHeaderSupplier;
+    this.bearerTokenSource = bearerTokenSource;
   }
 
   private static java.util.function.Supplier<String> staticHeader(String value) {
@@ -321,6 +353,26 @@ public final class CalDavClient implements HasLogger {
   }
 
   private HttpResponse<String> send(HttpRequest req) {
+    HttpResponse<String> resp = sendOnce(req);
+    // Planning-Feature #9 Schicht 7 — Bearer-Auth 401-retry. The
+    // cached access token may have been revoked by Google before
+    // its declared expiry (e.g. user revoked the grant from
+    // myaccount.google.com); a single retry with a freshly-issued
+    // token recovers transparently.
+    if (resp.statusCode() == 401 && bearerTokenSource != null) {
+      bearerTokenSource.onAuthRejected();
+      try {
+        HttpRequest retry = rebuildWithFreshAuth(req);
+        resp = sendOnce(retry);
+      } catch (RuntimeException rebuildEx) {
+        logger().info("CalDavClient 401-retry rebuild failed: {}",
+            rebuildEx.toString());
+      }
+    }
+    return resp;
+  }
+
+  private HttpResponse<String> sendOnce(HttpRequest req) {
     try {
       return http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     } catch (java.io.IOException ioe) {
@@ -330,6 +382,53 @@ public final class CalDavClient implements HasLogger {
       Thread.currentThread().interrupt();
       throw new IllegalStateException(
           "Interrupted talking to " + req.uri(), ie);
+    }
+  }
+
+  /**
+   * Rebuilds a request with a fresh {@code Authorization} header,
+   * preserving every other relevant attribute (method, URI, body,
+   * timeout, non-restricted headers). Used by the 401-retry path
+   * after the {@link BearerTokenSource} has been told its previous
+   * token was rejected.
+   */
+  private HttpRequest rebuildWithFreshAuth(HttpRequest original) {
+    HttpRequest.Builder b = HttpRequest.newBuilder(original.uri())
+        .method(original.method(),
+            original.bodyPublisher().orElse(HttpRequest.BodyPublishers.noBody()));
+    original.timeout().ifPresent(b::timeout);
+    original.headers().map().forEach((name, values) -> {
+      if ("Authorization".equalsIgnoreCase(name)) return;
+      if (isRestrictedHttpHeader(name)) return;
+      for (String v : values) {
+        try {
+          b.header(name, v);
+        } catch (IllegalArgumentException ignored) {
+          // some headers stay restricted in custom HTTP-Client
+          // implementations — drop silently rather than fail the
+          // retry over a non-essential header
+        }
+      }
+    });
+    String fresh = authorizationHeaderSupplier.get();
+    if (fresh != null && !fresh.isBlank()) {
+      b.header("Authorization", fresh);
+    }
+    return b.build();
+  }
+
+  private static boolean isRestrictedHttpHeader(String name) {
+    // From java.net.http.HttpRequest.Builder javadoc — these
+    // cannot be set by user code on a rebuilt request.
+    switch (name.toLowerCase(java.util.Locale.ROOT)) {
+      case "connection":
+      case "content-length":
+      case "expect":
+      case "host":
+      case "upgrade":
+        return true;
+      default:
+        return false;
     }
   }
 

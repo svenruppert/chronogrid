@@ -175,8 +175,12 @@ public final class CalendarService implements HasLogger {
                 + "GoogleTokenRefresher was supplied to fromConnections — "
                 + "use the 4-arg overload for OAuth-bearing setups.");
       }
-      Supplier<String> tokens = tokenRefresher.bind(server.oauth(), server.id());
-      return CalDavClient.withBearerToken(subscriptionUri, tokens);
+      // Planning-Feature #9 Schicht 7 — bind the retry-aware
+      // BearerTokenSource so 401s from Google trigger a transparent
+      // refresh + single retry.
+      com.svenruppert.chronogrid.client.BearerTokenSource source =
+          tokenRefresher.bindAsSource(server.oauth(), server.id());
+      return CalDavClient.withBearerToken(subscriptionUri, source);
     }
     if (server.hasAuth()) {
       return new CalDavClient(subscriptionUri,
