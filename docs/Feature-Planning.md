@@ -68,7 +68,13 @@ Commit-Bodies und der Backlog-Eintrag halten dieselbe Information.
 > hat Google bisher explizit als „separate follow-up" geführt —
 > jetzt offiziell auf der Pipeline.
 
-**Status:** 🟡 geplant
+**Status:** 🧪 fertig, Tests laufen — Schichten 1-7 ausgeliefert
+(`962197a`, `a755a69`, `c2517e8`, `94dcf95`). Schicht 8 (Bug-Buffer)
+ist inhärent abhängig vom realen Smoke-Test mit echtem Google-
+Konto: 27 neue Unit-Tests laufen grün, aber Provider-Quirks die
+sich erst bei tatsächlichem Google-Roundtrip zeigen können
+hier nicht antizipiert werden. Wartet auf Sven-Verifikation
+gegen ein Google-Cloud-Console-Projekt.
 
 ### Konzept
 
