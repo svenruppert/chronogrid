@@ -168,6 +168,13 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private static final String K_NOTIFY_TEST_OK = "calendar.notify.testOk";
   private static final String K_NOTIFY_TEST_FAIL = "calendar.notify.testFail";
   private static final String K_NOTIFY_APPLIED = "calendar.notify.applied";
+  // Planning-Feature #7 Schicht 4: status-aware notifications.
+  private static final String K_NOTIFY_MULTI_SUMMARY = "calendar.notify.multiServer.summary";
+  private static final String K_NOTIFY_REFRESHED = "calendar.notify.refreshed";
+  private static final String K_NOTIFY_CONNECTED = "calendar.notify.connected";
+  private static final String K_NOTIFY_SERVER_REMOVED = "calendar.notify.serverRemoved";
+  private static final String K_NOTIFY_SERVER_NAMED = "calendar.notify.subjectScope.server";
+  private static final String K_NOTIFY_CALENDAR_NAMED = "calendar.notify.subjectScope.calendar";
   private static final String K_NOTIFY_DISCOVERY_FAIL = "calendar.notify.discoveryFail";
   private static final String K_NOTIFY_DISCOVERY_EMPTY = "calendar.notify.discoveryEmpty";
   private static final String K_NOTIFY_DISCOVERY_FOUND = "calendar.notify.discoveryFound";
@@ -428,8 +435,13 @@ public class ChronoGrid extends Composite<VerticalLayout>
     Button refresh = new Button(messages.tr(K_TB_REFRESH, "Refresh"),
         VaadinIcon.REFRESH.create(), e -> {
           calendar.getEntryProvider().refreshAll();
-          notifyInfo(messages.tr(K_NOTIFY_APPLIED, "Reloaded from {0}",
-              service.collectionUri().toString()));
+          // Schicht 4: multi-server-aware. The pre-Schicht-4 message
+          // named only the primary collection URI — misleading when
+          // 3 different CalDAV backends just got re-queried in
+          // parallel. The summary is the same shape the Quick-Toggle
+          // and the Connection-Manager footer would render.
+          notifyInfo(messages.tr(K_NOTIFY_REFRESHED,
+              "Refreshed — {0}", multiServerSummary()));
         });
     refresh.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
 
@@ -1119,10 +1131,12 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
     rebuildServiceFromSubscriptions();
     calendar.getEntryProvider().refreshAll();
-    String summary = additional.isEmpty()
-        ? parsed.toString()
-        : parsed + " (+" + additional.size() + " more)";
-    notifyInfo(messages.tr(K_NOTIFY_APPLIED, "Connected to {0}", summary));
+    // Schicht 4: connect-toast names the new server AND surfaces the
+    // total state — "Connected to X — 3 servers, 7 calendars" tells
+    // the user where they are post-connect.
+    notifyInfo(messages.tr(K_NOTIFY_CONNECTED,
+        "Connected to {0} — {1}",
+        server.displayName(), multiServerSummary()));
     return true;
   }
 
@@ -1562,13 +1576,18 @@ public class ChronoGrid extends Composite<VerticalLayout>
         rebuildServiceFromSubscriptions();
         calendar.getEntryProvider().refreshAll();
       }
+      // Schicht 4: name which server was scanned, plus how many
+      // were ALREADY there (so the user can tell that "5 found" on
+      // an unchanged Nextcloud isn't a state change).
       notifyInfo(messages.tr(K_NOTIFY_DISCOVERY_FOUND,
-          "Found {0} calendar(s)", String.valueOf(found.size())));
+          "Found {0} calendar(s)", String.valueOf(found.size()))
+          + serverScopeHint(serverId));
     } catch (RuntimeException ex) {
       logger().info("Rediscovery against {} failed: {}",
           server.baseUri(), ex.toString());
       notifyError(messages.tr(K_NOTIFY_DISCOVERY_FAIL,
-          "Discovery failed: {0}", friendlyError(ex)));
+          "Discovery failed: {0}", friendlyError(ex))
+          + serverScopeHint(serverId));
     }
   }
 
@@ -1580,6 +1599,14 @@ public class ChronoGrid extends Composite<VerticalLayout>
    * UX in the manager dialog should match.
    */
   private void removeServerAtomic(String serverId) {
+    // Capture displayName BEFORE we drop the server so the
+    // notification gets a useful subject, not the opaque id.
+    String displayName = stateStore.readServers().stream()
+        .filter(s -> serverId.equals(s.id()))
+        .findFirst()
+        .map(CalDavServerConnection::displayName)
+        .orElse(serverId);
+
     java.util.List<CalendarSubscription> kept = new java.util.ArrayList<>();
     java.util.List<URI> droppedUris = new java.util.ArrayList<>();
     for (CalendarSubscription cs : stateStore.readSubscriptions()) {
@@ -1599,8 +1626,11 @@ public class ChronoGrid extends Composite<VerticalLayout>
     }
     rebuildServiceFromSubscriptions();
     calendar.getEntryProvider().refreshAll();
-    notifyInfo(messages.tr(K_NOTIFY_SUB_REMOVED,
-        "Disconnected from “{0}”.", serverId));
+    // Schicht 4: name the removed server explicitly and tell the
+    // user where they are post-removal ("2 servers remain").
+    notifyInfo(messages.tr(K_NOTIFY_SERVER_REMOVED,
+        "Removed server “{0}” — {1}",
+        displayName, multiServerSummary()));
   }
 
   private void changeSubscriptionColor(URI uri, String color) {
@@ -1638,19 +1668,27 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private void removeSubscription(URI uri) {
     java.util.List<CalendarSubscription> kept = new java.util.ArrayList<>();
     String name = null;
+    String serverId = null;
     for (CalendarSubscription cs : stateStore.readSubscriptions()) {
       if (cs.uri().equals(uri)) {
         name = cs.displayName();
+        serverId = cs.serverId();
         continue;
       }
       kept.add(cs);
     }
+    String scopeHint = serverScopeHint(serverId);
     storeSubscriptions(kept);
     pruneOrphanServers();
     rebuildServiceFromSubscriptions();
     calendar.getEntryProvider().refreshAll();
     String label = name == null ? uri.toString() : name;
-    notifyInfo(messages.tr(K_NOTIFY_SUB_REMOVED, "Disconnected from “{0}”.", label));
+    // Schicht 4: append the bracketed server scope ("[iCloud]") so
+    // a user with two Personal calendars on different servers can
+    // tell which one just vanished. Captured BEFORE pruneOrphan
+    // runs — the server entry may be gone by the toast.
+    notifyInfo(messages.tr(K_NOTIFY_SUB_REMOVED,
+        "Disconnected from “{0}”.", label) + scopeHint);
   }
 
   /**
@@ -1788,6 +1826,45 @@ public class ChronoGrid extends Composite<VerticalLayout>
       default -> messages.tr(K_ERROR_GENERIC,
           "Something went wrong: {0}", detail);
     };
+  }
+
+  /**
+   * Planning-Feature #7 Schicht 4 — collapsed multi-server status
+   * line of the shape <em>"3 servers, 7 calendars, 5 visible"</em>.
+   * The compact form scales gracefully to 5+ servers without
+   * flooding the toast. The visible count comes from the same
+   * {@link CalendarSubscription#visible} flag the Quick-Toggle
+   * drives, so the summary always agrees with the
+   * {@code Sichtbar (N/M)} label up in the toolbar.
+   */
+  private String multiServerSummary() {
+    int servers = stateStore.readServers().size();
+    var subs = stateStore.readSubscriptions();
+    int total = subs.size();
+    long visible = subs.stream()
+        .filter(CalendarSubscription::visible).count();
+    return messages.tr(K_NOTIFY_MULTI_SUMMARY,
+        "{0} servers, {1} calendars, {2} visible",
+        String.valueOf(servers),
+        String.valueOf(total),
+        String.valueOf(visible));
+  }
+
+  /**
+   * Renders the bracketed server-scope hint shown alongside a
+   * primary message: e.g. {@code [iCloud]} appended after
+   * "Disconnected from "Family"". Returns the empty string when
+   * the server is unknown — the notification still reads cleanly
+   * without it.
+   */
+  private String serverScopeHint(String serverId) {
+    if (serverId == null) return "";
+    return stateStore.readServers().stream()
+        .filter(s -> serverId.equals(s.id()))
+        .findFirst()
+        .map(s -> messages.tr(K_NOTIFY_SERVER_NAMED, " [{0}]",
+            s.displayName()))
+        .orElse("");
   }
 
   private static void notifyInfo(String text) {

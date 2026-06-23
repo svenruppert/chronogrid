@@ -475,6 +475,60 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #7 Schicht 4: multiServerSummary collapses servers + subs + visible count into one line")
+  void multiServerSummaryReflectsStateStore() throws Exception {
+    AppUser user = new AppUser(97L, "Summary User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    String srv1 = "summary-srv-1";
+    String srv2 = "summary-srv-2";
+    URI base1 = URI.create("https://caldav.example/srv1/");
+    URI base2 = URI.create("https://caldav.example/srv2/");
+    VaadinSession.getCurrent().setAttribute(
+        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
+            .SESSION_KEY_SERVERS,
+        java.util.List.of(
+            new CalDavServerConnection(srv1, "Alpha", base1, "u", "p"),
+            new CalDavServerConnection(srv2, "Beta", base2, "u", "p")));
+    URI sa = URI.create("https://caldav.example/srv1/cal-a/");
+    URI sb = URI.create("https://caldav.example/srv1/cal-b/");
+    URI sc = URI.create("https://caldav.example/srv2/cal-c/");
+    // 2 servers, 3 calendars, 2 visible (sc is hidden).
+    VaadinSession.getCurrent().setAttribute(
+        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        java.util.List.of(
+            new CalendarSubscription(sa, "Alpha-A", "#1F77B4", true, srv1),
+            new CalendarSubscription(sb, "Alpha-B", "#FF7F0E", true, srv1),
+            new CalendarSubscription(sc, "Beta-C", "#2CA02C", false, srv2)));
+
+    navigate(CalendarRouteView.class);
+    ChronoGrid view = findCalendarView();
+    java.lang.reflect.Method summary =
+        ChronoGrid.class.getDeclaredMethod("multiServerSummary");
+    summary.setAccessible(true);
+    String text = (String) summary.invoke(view);
+
+    // The summary template carries three positional counters; the
+    // exact wording differs per locale but the counters must all
+    // appear and match the state-store reading.
+    assertTrue(text.contains("2"),
+        "summary must include server count (2); got: " + text);
+    assertTrue(text.contains("3"),
+        "summary must include calendar count (3); got: " + text);
+    // The "visible" counter is 2 — same as server count, so a
+    // simple .contains("2") would be ambiguous. Assert via the
+    // numeric tokens in the produced string.
+    java.util.List<Integer> nums = new java.util.ArrayList<>();
+    for (String tok : text.split("\\D+")) {
+      if (!tok.isBlank()) nums.add(Integer.parseInt(tok));
+    }
+    assertEquals(java.util.List.of(2, 3, 2), nums,
+        "summary must carry exactly (servers=2, calendars=3, visible=2); "
+            + "got tokens " + nums + " from \"" + text + "\"");
+  }
+
+  @Test
   @DisplayName("Planning-Feature #7 Schicht 5: legacy single-server connection auto-migrates to server + subscription on mount")
   void legacyConnectionAutoMigratesOnMount() {
     AppUser user = new AppUser(95L, "Migration User",
