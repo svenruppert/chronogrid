@@ -1195,24 +1195,57 @@ public class ChronoGrid extends Composite<VerticalLayout>
 
   // ── wizard apply ───────────────────────────────────────────────
 
+  /**
+   * Planning-Feature #9 Schicht 4 — OAuth-aware wizard apply. When
+   * {@code oauth} is non-null the new server entry uses
+   * {@link CalDavServerConnection#createOAuth} and ignores
+   * username/password; otherwise the legacy Basic-Auth path runs.
+   */
   private boolean applyConfig(String rawUri, String user, String pass,
-                              java.util.Set<DiscoveredCalendar> picked) {
+                              java.util.Set<DiscoveredCalendar> picked,
+                              com.svenruppert.chronogrid.auth.GoogleOAuthCredentials oauth) {
     URI parsed = parseUri(rawUri);
     if (parsed == null) return false;
-    // Each wizard Finish adds (or refreshes) ONE server entry.
-    // Subscriptions get stamped with that server's id.
-    CalDavServerConnection server = upsertServer(parsed, user, pass);
+    CalDavServerConnection server = oauth != null
+        ? upsertOAuthServer(parsed, oauth)
+        : upsertServer(parsed, user, pass);
     mergeSubscriptionsWithServer(parsed, picked, server.id());
 
     rebuildServiceFromSubscriptions();
     calendar.getEntryProvider().refreshAll();
-    // Schicht 4: connect-toast names the new server AND surfaces the
-    // total state — "Connected to X — 3 servers, 7 calendars" tells
-    // the user where they are post-connect.
     notifyInfo(messages.tr(K_NOTIFY_CONNECTED,
         "Connected to {0} — {1}",
         server.displayName(), multiServerSummary()));
     return true;
+  }
+
+  /**
+   * Planning-Feature #9 Schicht 4 — OAuth-aware upsert. Matching on
+   * baseUri replaces the existing entry's OAuth credentials in
+   * place (so a re-run of the wizard for the same Google account
+   * refreshes the refresh-token without piling duplicates).
+   */
+  private CalDavServerConnection upsertOAuthServer(URI baseUri,
+      com.svenruppert.chronogrid.auth.GoogleOAuthCredentials oauth) {
+    java.util.List<CalDavServerConnection> existing = stateStore.readServers();
+    java.util.List<CalDavServerConnection> updated = new java.util.ArrayList<>();
+    CalDavServerConnection matched = null;
+    for (CalDavServerConnection s : existing) {
+      if (s.baseUri().equals(baseUri)) {
+        matched = new CalDavServerConnection(s.id(), s.displayName(),
+            s.baseUri(), null, null, oauth);
+        updated.add(matched);
+      } else {
+        updated.add(s);
+      }
+    }
+    if (matched == null) {
+      matched = CalDavServerConnection.createOAuth(
+          "Google (" + baseUri.getHost() + ")", baseUri, oauth);
+      updated.add(matched);
+    }
+    storeServers(updated);
+    return matched;
   }
 
   /**
@@ -1504,7 +1537,7 @@ public class ChronoGrid extends Composite<VerticalLayout>
         },
         result -> applyConfig(result.uri().toString(),
             result.username(), result.password(),
-            result.selectedCalendars()),
+            result.selectedCalendars(), result.oauth()),
         (isError, msg) -> {
           if (isError) notifyError(msg); else notifyInfo(msg);
         });

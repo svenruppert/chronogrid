@@ -104,6 +104,20 @@ public final class ConnectionWizardDialog
   private static final String K_BULK_ON = "calendar.wizard.bulk.on";
   private static final String K_BULK_OFF = "calendar.wizard.bulk.off";
   private static final String K_PROVIDER_PREFIX = "calendar.settings.provider.";
+  // Planning-Feature #9 Schicht 4 — Google OAuth keys.
+  private static final String K_GOOGLE_CLIENT_ID = "calendar.wizard.google.clientId";
+  private static final String K_GOOGLE_CLIENT_SECRET = "calendar.wizard.google.clientSecret";
+  private static final String K_GOOGLE_SIGN_IN = "calendar.wizard.google.signIn";
+  private static final String K_GOOGLE_HINT = "calendar.wizard.google.hint";
+  private static final String K_GOOGLE_AWAITING = "calendar.wizard.google.awaiting";
+  private static final String K_GOOGLE_AUTHORIZED = "calendar.wizard.google.authorized";
+  private static final String K_GOOGLE_ERROR = "calendar.wizard.google.error";
+  private static final String K_GOOGLE_DEFAULT_CALENDAR = "calendar.wizard.google.defaultCalendar";
+
+  private static final String GOOGLE_AUTH_BASE_URL =
+      "https://accounts.google.com/o/oauth2/v2/auth";
+  private static final String GOOGLE_CALENDAR_SCOPE =
+      "https://www.googleapis.com/auth/calendar";
 
   // ── injected callbacks ────────────────────────────────────────────
   private final CalendarMessages messages;
@@ -138,18 +152,57 @@ public final class ConnectionWizardDialog
   private transient CalDavProviderPreset selectedPreset;
 
   /**
+   * Planning-Feature #9 Schicht 4 — Google OAuth credentials filled in
+   * by the {@code OAuthCallbackView} once the user has completed the
+   * sign-in flow in a separate tab. Non-null means "Step 2 done";
+   * the wizard then unlocks the "Next" button.
+   */
+  private transient com.svenruppert.chronogrid.auth.GoogleOAuthCredentials oauthResult;
+  /**
+   * Single {@link java.security.SecureRandom} instance shared by
+   * every PKCE-verifier generation — instantiating one per call
+   * trips SpotBugs' {@code DMI_RANDOM_USED_ONLY_ONCE}.
+   */
+  private static final java.security.SecureRandom PKCE_RNG =
+      new java.security.SecureRandom();
+  private final TextField googleClientIdField =
+      new TextField("Google OAuth Client ID");
+  private final PasswordField googleClientSecretField =
+      new PasswordField("Google OAuth Client Secret");
+  private final Span googleStatus = new Span();
+  private final Button googleSignInButton = new Button();
+
+  /**
    * The captured user input the host needs to upsert a new server
-   * connection. {@code username} / {@code password} may be empty
-   * strings (anonymous Basic-auth) but are never null.
-   * {@code selectedCalendars} is defensively copied on construction
-   * and exposed read-only.
+   * connection. Three mutually-exclusive auth shapes:
+   *
+   * <ul>
+   *   <li><strong>Anonymous</strong> — {@code username} blank,
+   *       {@code oauth} null.</li>
+   *   <li><strong>Basic-auth</strong> — {@code username} +
+   *       {@code password} populated, {@code oauth} null.</li>
+   *   <li><strong>OAuth</strong> (Planning #9 Schicht 4) —
+   *       {@code oauth} non-null with the credentials Google
+   *       returned via the callback flow, {@code username} +
+   *       {@code password} blank.</li>
+   * </ul>
+   *
+   * <p>{@code selectedCalendars} is defensively copied on
+   * construction and exposed read-only.
    */
   public record Result(URI uri, String username, String password,
-                       Set<DiscoveredCalendar> selectedCalendars) {
+                       Set<DiscoveredCalendar> selectedCalendars,
+                       com.svenruppert.chronogrid.auth.GoogleOAuthCredentials oauth) {
     public Result {
       selectedCalendars = selectedCalendars == null
           ? Set.of()
           : Set.copyOf(selectedCalendars);
+    }
+
+    /** Backward-compatible Basic-Auth constructor (no OAuth). */
+    public Result(URI uri, String username, String password,
+                  Set<DiscoveredCalendar> selectedCalendars) {
+      this(uri, username, password, selectedCalendars, null);
     }
   }
 
@@ -228,6 +281,31 @@ public final class ConnectionWizardDialog
     step2Pane.setPadding(false);
     step2Pane.setSpacing(true);
     step2Pane.setVisible(false);
+
+    // ── Planning-Feature #9 Schicht 4 — Google OAuth fields ──────
+    googleClientIdField.setId("calendar-wizard-google-client-id");
+    googleClientIdField.setLabel(messages.tr(K_GOOGLE_CLIENT_ID,
+        "Google OAuth Client ID"));
+    googleClientIdField.setWidthFull();
+    String envClientId = System.getenv("CHRONOGRID_GOOGLE_CLIENT_ID");
+    if (envClientId != null && !envClientId.isBlank()) {
+      googleClientIdField.setValue(envClientId);
+    }
+    googleClientSecretField.setId("calendar-wizard-google-client-secret");
+    googleClientSecretField.setLabel(messages.tr(K_GOOGLE_CLIENT_SECRET,
+        "Google OAuth Client Secret"));
+    googleClientSecretField.setWidthFull();
+    String envClientSecret = System.getenv("CHRONOGRID_GOOGLE_CLIENT_SECRET");
+    if (envClientSecret != null && !envClientSecret.isBlank()) {
+      googleClientSecretField.setValue(envClientSecret);
+    }
+    googleStatus.setId("calendar-wizard-google-status");
+    googleStatus.addClassName("chronogrid-secondary-text");
+    googleSignInButton.setId("calendar-wizard-google-sign-in");
+    googleSignInButton.setText(messages.tr(K_GOOGLE_SIGN_IN, "Sign in with Google"));
+    googleSignInButton.setIcon(VaadinIcon.SIGN_IN.create());
+    googleSignInButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+    googleSignInButton.addClickListener(e -> startGoogleSignIn());
 
     // ── step 3 — calendars ────────────────────────────────────────
     discoveryStatus = new Span("");
@@ -338,11 +416,21 @@ public final class ConnectionWizardDialog
       return;
     }
     if (target == 2 && !validateStep1()) return;
+    if (target == 2) populateStep2();
     if (target == 3) {
       if (!validateStep2()) return;
       // Discovery is async (HTTP) but the dialog stays open and we
       // simply update the status label while picker.setVisible(false).
-      runDiscovery();
+      if (isGoogle()) {
+        // Planning-Feature #9: Google's CalDAV per-calendar discovery
+        // is non-trivial; for v1 we present a single placeholder
+        // entry so the wizard can finish. The user can then run
+        // Re-discover from the Manager-Dialog to enumerate their
+        // actual calendars via OAuth.
+        useGooglePlaceholderDiscovery();
+      } else {
+        runDiscovery();
+      }
     }
     currentStep = target;
     step1Pane.setVisible(currentStep == 1);
@@ -353,6 +441,153 @@ public final class ConnectionWizardDialog
         ? messages.tr(K_FINISH, "Add connection")
         : messages.tr(K_NEXT, "Next"));
     refreshStepBadges();
+  }
+
+  /**
+   * Planning-Feature #9 Schicht 4 — swap Step 2's content based on
+   * the selected preset. Google needs Client ID / Secret / Sign-in
+   * button; everything else needs username / password / test
+   * connection.
+   */
+  private void populateStep2() {
+    step2Pane.removeAll();
+    if (isGoogle()) {
+      Span hint = new Span(messages.tr(K_GOOGLE_HINT,
+          "Paste your Google OAuth Client ID + Secret from the Google "
+              + "Cloud Console (or set the CHRONOGRID_GOOGLE_CLIENT_ID + "
+              + "CHRONOGRID_GOOGLE_CLIENT_SECRET environment variables to "
+              + "pre-fill them). Clicking Sign in opens accounts.google.com "
+              + "in a new tab; once you grant the Calendar scope, the "
+              + "OAuth callback returns here and unlocks Next."));
+      hint.addClassName("chronogrid-secondary-text");
+      step2Pane.add(googleClientIdField, googleClientSecretField, hint,
+          googleSignInButton, googleStatus);
+      googleStatus.setText(oauthResult == null
+          ? messages.tr(K_GOOGLE_AWAITING, "Awaiting Google sign-in…")
+          : messages.tr(K_GOOGLE_AUTHORIZED,
+              "✓ Signed in. Click Next to choose calendars."));
+    } else {
+      step2Pane.add(usernameField, passwordField, providerHint);
+      Button testButton = new Button(
+          messages.tr(K_TEST_CONNECTION, "Test connection"),
+          VaadinIcon.CONNECT.create(),
+          e -> runProbe());
+      testButton.setId("calendar-wizard-test");
+      testButton.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
+      step2Pane.add(testButton);
+    }
+  }
+
+  private boolean isGoogle() {
+    return selectedPreset != null && "google".equals(selectedPreset.id());
+  }
+
+  /**
+   * Planning-Feature #9 Schicht 4 — kicks off the OAuth flow.
+   * Generates state + PKCE verifier, registers the flow in the
+   * {@link com.svenruppert.chronogrid.auth.OAuthFlowRegistry},
+   * opens Google's authorization URL in a new browser tab.
+   */
+  private void startGoogleSignIn() {
+    String clientId = googleClientIdField.getValue();
+    String clientSecret = googleClientSecretField.getValue();
+    if (clientId == null || clientId.isBlank()
+        || clientSecret == null || clientSecret.isBlank()) {
+      notify.accept(true, messages.tr(K_GOOGLE_ERROR,
+          "Google OAuth needs both Client ID and Client Secret."));
+      return;
+    }
+
+    com.vaadin.flow.component.UI ui = com.vaadin.flow.component.UI.getCurrent();
+    if (ui == null) return;
+
+    // Read window.location.origin from the browser, then build the
+    // authorization URL with that as the redirect base.
+    ui.getPage().executeJs("return window.location.origin")
+        .then(String.class, origin -> launchGoogleAuth(
+            origin, clientId, clientSecret, ui));
+  }
+
+  private void launchGoogleAuth(String origin, String clientId,
+                                String clientSecret,
+                                com.vaadin.flow.component.UI originatingUi) {
+    String redirectUri = origin + "/oauth/callback/google";
+    String state = java.util.UUID.randomUUID().toString();
+    String codeVerifier = randomCodeVerifier();
+    String codeChallenge = sha256ToBase64Url(codeVerifier);
+
+    com.svenruppert.chronogrid.auth.OAuthFlowRegistry.register(state,
+        new com.svenruppert.chronogrid.auth.OAuthFlowRegistry.OAuthFlow(
+            codeVerifier, clientId, clientSecret, redirectUri,
+            (creds, error) -> originatingUi.access(() -> {
+              if (creds != null) {
+                this.oauthResult = creds;
+                googleStatus.setText(messages.tr(K_GOOGLE_AUTHORIZED,
+                    "✓ Signed in. Click Next to choose calendars."));
+              } else {
+                this.oauthResult = null;
+                googleStatus.setText(messages.tr(K_GOOGLE_ERROR,
+                    "Sign-in failed: {0}", error == null ? "unknown" : error));
+                notify.accept(true, messages.tr(K_GOOGLE_ERROR,
+                    "Sign-in failed: {0}", error == null ? "unknown" : error));
+              }
+            })));
+
+    String authUrl = GOOGLE_AUTH_BASE_URL
+        + "?client_id=" + urlEncode(clientId)
+        + "&redirect_uri=" + urlEncode(redirectUri)
+        + "&response_type=code"
+        + "&scope=" + urlEncode(GOOGLE_CALENDAR_SCOPE)
+        + "&state=" + urlEncode(state)
+        + "&code_challenge=" + urlEncode(codeChallenge)
+        + "&code_challenge_method=S256"
+        + "&access_type=offline"
+        + "&prompt=consent";
+
+    originatingUi.getPage().open(authUrl, "_blank");
+  }
+
+  private static String randomCodeVerifier() {
+    byte[] bytes = new byte[32];
+    PKCE_RNG.nextBytes(bytes);
+    return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+  }
+
+  private static String sha256ToBase64Url(String input) {
+    try {
+      java.security.MessageDigest md =
+          java.security.MessageDigest.getInstance("SHA-256");
+      byte[] digest = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+    } catch (java.security.NoSuchAlgorithmException nsae) {
+      // SHA-256 is part of the JDK's minimum requirements; can't actually fire.
+      throw new IllegalStateException("SHA-256 not available", nsae);
+    }
+  }
+
+  private static String urlEncode(String value) {
+    return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Planning-Feature #9 — Step 3 placeholder for Google flows.
+   * Google's CalDAV per-calendar discovery is a v2 follow-up; the
+   * Wizard can finish with a single placeholder entry that the
+   * user will refine via the Manager-Dialog's Re-discover.
+   */
+  private void useGooglePlaceholderDiscovery() {
+    String defaultLabel = messages.tr(K_GOOGLE_DEFAULT_CALENDAR,
+        "Primary Google Calendar (discover later from the Manager)");
+    URI placeholder = URI.create(
+        "https://apidata.googleusercontent.com/caldav/v2/primary/events");
+    DiscoveredCalendar placeholderCal =
+        new DiscoveredCalendar(placeholder, defaultLabel, "#1F77B4");
+    picker.setItems(java.util.List.of(placeholderCal));
+    picker.setValue(java.util.Set.of(placeholderCal));
+    bulkRow.setVisible(false);
+    discoveryStatus.setText(messages.tr(K_DISCOVERY_FOUND_FEW,
+        "Found {0} calendar(s) — all pre-selected.", "1"));
+    picker.setVisible(true);
   }
 
   private boolean validateStep1() {
@@ -377,7 +612,14 @@ public final class ConnectionWizardDialog
     // Credentials may be blank (anonymous); only validate the URI
     // again in case the user edited it in step 1 with an empty
     // value but somehow got through.
-    return validateStep1();
+    if (!validateStep1()) return false;
+    if (isGoogle() && oauthResult == null) {
+      notify.accept(true, messages.tr(K_GOOGLE_ERROR,
+          "Sign-in failed: {0}",
+          "Click \"Sign in with Google\" and complete the consent first."));
+      return false;
+    }
+    return true;
   }
 
   private void refreshStepBadges() {
@@ -464,10 +706,19 @@ public final class ConnectionWizardDialog
       uriField.setInvalid(true);
       return;
     }
-    onComplete.accept(new Result(parsed,
-        usernameField.getValue() == null ? "" : usernameField.getValue(),
-        passwordField.getValue() == null ? "" : passwordField.getValue(),
-        picker.getValue() == null ? Set.of() : picker.getValue()));
+    // Planning-Feature #9 Schicht 4 — OAuth path: username/password
+    // stay empty, oauth carries the credentials. Basic-Auth path
+    // unchanged.
+    if (isGoogle() && oauthResult != null) {
+      onComplete.accept(new Result(parsed, "", "",
+          picker.getValue() == null ? Set.of() : picker.getValue(),
+          oauthResult));
+    } else {
+      onComplete.accept(new Result(parsed,
+          usernameField.getValue() == null ? "" : usernameField.getValue(),
+          passwordField.getValue() == null ? "" : passwordField.getValue(),
+          picker.getValue() == null ? Set.of() : picker.getValue()));
+    }
     getContent().close();
   }
 
