@@ -188,24 +188,75 @@ public final class CalendarService implements HasLogger {
     return fanOut(client -> client.findTodosInRange(fromUtc, toUtc));
   }
 
+  /**
+   * Planning-Feature #8 — parallel fan-out across all read clients.
+   *
+   * <p>Pre-Feature-#8 this loop was strictly sequential: 5 servers
+   * each taking ~800&nbsp;ms REPORT meant ~4&nbsp;s before the first
+   * entry surfaced, and one hanging server blocked every other. The
+   * parallel variant collapses wall-clock to the slowest-single-
+   * client time and isolates failures.
+   *
+   * <p>{@link CompletableFuture#supplyAsync(java.util.function.Supplier)}
+   * uses {@link java.util.concurrent.ForkJoinPool#commonPool()},
+   * which is appropriate for short-lived HTTP I/O bursts (the FJP
+   * default parallelism = available cores). Each per-client task
+   * builds a private {@code List<Entry>}; only the final flattening
+   * touches a shared {@link Stream.Builder}, single-threaded, so
+   * no synchronisation is needed inside the workers.
+   *
+   * <p><b>Failure semantics:</b> matches the pre-Feature-#8 contract.
+   * If any client throws, {@code allOf().join()} re-throws the
+   * underlying exception wrapped in {@link java.util.concurrent.CompletionException}
+   * — unwrapped here so callers still catch the original
+   * {@link RuntimeException} they used to catch. Future work
+   * (graceful per-client partial-failure surfacing) is tracked in
+   * Planning #7 Schicht 4 (already shipped, status-aware
+   * notifications). Until then, "any client fails → fan-out fails"
+   * stays the contract.
+   */
   private Stream<Entry> fanOut(
       java.util.function.Function<CalDavClient, List<RemoteEvent>> op) {
+    Map<URI, String> colourByUri = new HashMap<>(readClients.size());
+    for (CalDavClient c : readClients) {
+      colourByUri.put(c.collectionUri(),
+          PALETTE[Math.floorMod(c.collectionUri().hashCode(), PALETTE.length)]);
+    }
+
+    List<java.util.concurrent.CompletableFuture<List<Entry>>> futures =
+        new ArrayList<>(readClients.size());
+    for (CalDavClient client : readClients) {
+      futures.add(java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        List<Entry> perClient = new ArrayList<>();
+        String calendarColor = colourByUri.get(client.collectionUri());
+        for (RemoteEvent remote : op.apply(client)) {
+          Entry entry = mapper.toEntry(remote);
+          applyColours(entry, calendarColor);
+          perClient.add(entry);
+        }
+        return perClient;
+      }));
+    }
+
+    try {
+      java.util.concurrent.CompletableFuture
+          .allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+          .join();
+    } catch (java.util.concurrent.CompletionException ce) {
+      Throwable cause = ce.getCause();
+      if (cause instanceof RuntimeException re) throw re;
+      throw ce;
+    }
+
     Stream.Builder<Entry> all = Stream.builder();
     int total = 0;
-    for (int i = 0; i < readClients.size(); i++) {
-      CalDavClient client = readClients.get(i);
-      String calendarColor = PALETTE[Math.floorMod(client.collectionUri().hashCode(),
-          PALETTE.length)];
-      int perClient = 0;
-      for (RemoteEvent remote : op.apply(client)) {
-        Entry entry = mapper.toEntry(remote);
-        applyColours(entry, calendarColor);
-        all.accept(entry);
-        perClient++;
-      }
-      total += perClient;
+    for (java.util.concurrent.CompletableFuture<List<Entry>> f : futures) {
+      List<Entry> entries = f.getNow(List.of());
+      for (Entry e : entries) all.accept(e);
+      total += entries.size();
     }
-    logger().info("fanOut across {} client(s) produced {} entries total",
+    logger().info("fanOut across {} client(s) produced {} entries total "
+        + "(parallel, ForkJoinPool.commonPool)",
         readClients.size(), total);
     return all.build();
   }
