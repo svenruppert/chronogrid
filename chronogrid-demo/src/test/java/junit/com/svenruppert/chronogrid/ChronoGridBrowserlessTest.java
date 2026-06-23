@@ -475,6 +475,98 @@ class ChronoGridBrowserlessTest extends BrowserlessTest {
   }
 
   @Test
+  @DisplayName("Planning-Feature #7 Schicht 5: legacy single-server connection auto-migrates to server + subscription on mount")
+  void legacyConnectionAutoMigratesOnMount() {
+    AppUser user = new AppUser(95L, "Migration User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    // Pre-Schicht-5: a legacy session held only the single-server
+    // CalDavConnectionConfig. After mount, the migration must
+    // produce one server + one subscription (and the legacy key
+    // must remain intact for rollback-safety).
+    URI legacyUri = URI.create("https://caldav.example/legacy/cal/");
+    VaadinSession.getCurrent().setAttribute(
+        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
+            .SESSION_KEY_CONNECTION,
+        new com.svenruppert.chronogrid.service.CalDavConnectionConfig(
+            legacyUri, "alice", "secret"));
+    // No SESSION_KEY_SERVERS, no SESSION_KEY_SUBSCRIPTIONS — only
+    // the legacy key is present, which is exactly the pre-migration
+    // state shape.
+
+    navigate(CalendarRouteView.class);
+
+    java.util.List<com.svenruppert.chronogrid.service.CalDavServerConnection>
+        servers = ChronoGrid.readServers();
+    assertEquals(1, servers.size(),
+        "migration must produce exactly one server");
+    assertEquals("alice", servers.get(0).username(),
+        "migrated server must carry the legacy username");
+    assertEquals("secret", servers.get(0).password(),
+        "migrated server must carry the legacy password");
+
+    java.util.List<CalendarSubscription> subs = ChronoGrid.readSubscriptions();
+    assertEquals(1, subs.size(),
+        "migration must produce exactly one subscription");
+    assertEquals(legacyUri, subs.get(0).uri(),
+        "migrated subscription must point at the legacy collection URI");
+    assertEquals(servers.get(0).id(), subs.get(0).serverId(),
+        "migrated subscription must reference the migrated server's id");
+
+    // Rollback-safety: the legacy key MUST still be readable. A
+    // mid-deploy rollback re-mounts the legacy connection without
+    // any data loss.
+    assertNotNull(VaadinSession.getCurrent().getAttribute(
+        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
+            .SESSION_KEY_CONNECTION),
+        "Schicht 5 must NOT delete the legacy connection key — "
+            + "it stays readable as a rollback-safety net");
+  }
+
+  @Test
+  @DisplayName("Planning-Feature #7 Schicht 5: migration is a no-op when multi-server state already exists")
+  void legacyMigrationIsNoOpWhenMultiServerStateExists() {
+    AppUser user = new AppUser(96L, "Already-Migrated User",
+        EnumSet.of(AuthorizationRole.USER));
+    SubjectStores.subjectStore().setCurrentSubject(user, AppUser.class);
+
+    // BOTH the legacy key AND existing multi-server state — the
+    // migration must defer to the multi-server state and leave it
+    // untouched. Otherwise a re-mount could clobber subscriptions
+    // the user just added.
+    URI legacyUri = URI.create("https://caldav.example/legacy/");
+    VaadinSession.getCurrent().setAttribute(
+        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
+            .SESSION_KEY_CONNECTION,
+        new com.svenruppert.chronogrid.service.CalDavConnectionConfig(
+            legacyUri, "alice", "secret"));
+    URI existingSub = URI.create("https://caldav.example/multi/cal/");
+    String existingServerId = "existing-srv";
+    VaadinSession.getCurrent().setAttribute(
+        com.svenruppert.chronogrid.state.VaadinSessionCalendarStateStore
+            .SESSION_KEY_SERVERS,
+        java.util.List.of(new com.svenruppert.chronogrid.service.CalDavServerConnection(
+            existingServerId, "Already here",
+            URI.create("https://caldav.example/multi/"), "bob", "pw")));
+    VaadinSession.getCurrent().setAttribute(
+        ChronoGrid.SESSION_KEY_SUBSCRIPTIONS,
+        java.util.List.of(new CalendarSubscription(existingSub,
+            "Already", "#FF0000", true, existingServerId)));
+
+    navigate(CalendarRouteView.class);
+
+    java.util.List<com.svenruppert.chronogrid.service.CalDavServerConnection>
+        servers = ChronoGrid.readServers();
+    assertEquals(1, servers.size(),
+        "no-op migration must leave server count at 1 (the pre-existing one)");
+    assertEquals(existingServerId, servers.get(0).id(),
+        "migration must not replace the pre-existing server entry");
+    assertEquals(1, ChronoGrid.readSubscriptions().size(),
+        "no-op migration must leave subscription count at 1");
+  }
+
+  @Test
   @DisplayName("Planning-Feature #7 Schicht 2: hybrid default-visibility threshold is 5")
   void wizardHybridThresholdConstant() {
     // The hybrid default-visibility rule (≤5 auto-on, >5 auto-off)

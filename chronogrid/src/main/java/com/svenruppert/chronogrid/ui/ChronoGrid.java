@@ -266,6 +266,11 @@ public class ChronoGrid extends Composite<VerticalLayout>
     this.service = service;
     this.focalDay = stateStore.readFocalDay(LocalDate.now());
 
+    // Planning-Feature #7 Schicht 5: one-shot legacy migration.
+    // Run BEFORE anything reads servers/subscriptions so the rest
+    // of the constructor sees the migrated multi-server state.
+    migrateLegacyConnectionIfNeeded();
+
     VerticalLayout root = getContent();
     root.setSizeFull();
     root.setPadding(false);
@@ -1365,6 +1370,59 @@ public class ChronoGrid extends Composite<VerticalLayout>
   private CalDavConnectionConfig currentConfig() {
     return stateStore.readConnection()
         .orElseGet(() -> CalDavConnectionConfig.anonymous(service.collectionUri()));
+  }
+
+  /**
+   * Planning-Feature #7 Schicht 5 — one-shot legacy migration.
+   *
+   * <p>Pre-multi-server sessions stored a single
+   * {@link CalDavConnectionConfig} under the legacy
+   * {@code calendar.connection.config} session key. The Connection
+   * Manager + Wizard + Quick-Toggle work exclusively against the
+   * multi-server state (servers + subscriptions). Without a
+   * migration step, an existing user who upgrades would see an
+   * empty Connection Manager + lose their stored credentials.
+   *
+   * <p>The migration runs at most once per session (idempotent: it
+   * checks for an existing server/subscription before doing
+   * anything) and converts the legacy single-connection into one
+   * {@link CalDavServerConnection} + one {@link CalendarSubscription}
+   * stamped with that server's id.
+   *
+   * <p><b>Risk-mitigation:</b> the legacy session key is NOT
+   * deleted by this migration. Both stores stay readable so a
+   * mid-deploy rollback can re-mount the legacy connection without
+   * data loss. A future major release will pull the legacy key
+   * once telemetry shows zero readers.
+   */
+  private void migrateLegacyConnectionIfNeeded() {
+    if (!stateStore.readSubscriptions().isEmpty()) return;
+    if (!stateStore.readServers().isEmpty()) return;
+    java.util.Optional<CalDavConnectionConfig> legacy = stateStore.readConnection();
+    if (legacy.isEmpty()) return;
+
+    CalDavConnectionConfig cfg = legacy.get();
+    URI collection = cfg.collectionUri();
+    // Use the collection URI as the server's baseUri too — the user
+    // can refine via the Connection-Manager's Re-discover later.
+    CalDavServerConnection server = CalDavServerConnection.create(
+        "Migrated", collection,
+        cfg.username() == null ? "" : cfg.username(),
+        cfg.password() == null ? "" : cfg.password());
+    // Pick a deterministic default colour for the migrated entry —
+    // the user can re-colour via the Connection-Manager's inline
+    // picker any time.
+    CalendarSubscription sub = new CalendarSubscription(
+        collection,
+        "Migrated calendar",
+        "#1F77B4",
+        true,
+        server.id());
+    stateStore.writeServers(java.util.List.of(server));
+    stateStore.writeSubscriptions(java.util.List.of(sub));
+    rebuildServiceFromSubscriptions();
+    logger().info("Migrated legacy single-server connection to multi-server state: {}",
+        collection);
   }
 
   private void storeConfig(CalDavConnectionConfig config) {
