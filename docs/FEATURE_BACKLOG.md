@@ -692,3 +692,399 @@ CSS: none — the components inherit Lumo defaults.
   current universe. v1 ships the simpler text input — the
   underlying normalisation makes the input forgiving (extra
   whitespace, case mixing, trailing commas all collapse cleanly).
+
+---
+
+## #7 — Focal day preserved across view switches
+
+**Status:** ✅ shipped 2026-06-22 in `1d86b20`
+**Filed:** 2026-06-22
+
+### Idea
+
+When the user jumps to a date (via the date picker, sliding one day
+back/forth, paging by the current interval, or just navigating from
+"Today") and then switches between Day / Week / N-days / Month
+views, the calendar **stays anchored on that date**. A user looking
+at the week of 2026-09-15 in Week-view and switching to Month-view
+lands in September 2026, not on today's month.
+
+### Motivation
+
+Pre-feature, the view-switcher was a blind jump: FullCalendar
+internally kept a *visible range start*, but the **focused day**
+(the one the user just navigated to) was lost. The user typed
+"15 Sep" in the picker, looked, switched to Month — and the grid
+snapped back to today's month. That broke every multi-step
+exploration of a future or past week and made N-days view almost
+useless after any directed navigation.
+
+A persistent focal day restores the temporal anchor: pick a day,
+look at it through whichever view best fits the question, then
+move on.
+
+### Sketch
+
+**State**
+
+- `ChronoGrid` carries a private `LocalDate focalDay` field
+  (default `LocalDate.now()` at mount).
+- The `CalendarStateStore` interface gained optional
+  `readFocalDay(LocalDate fallback) / writeFocalDay(LocalDate)`
+  defaults; the `VaadinSessionCalendarStateStore` implementation
+  persists the value under
+  `SESSION_KEY_FOCAL_DAY = "calendar.nav.focalDay"`. Session-bound,
+  so a page reload restores it but a logout drops it (deliberate).
+
+**Update points (four user gestures + one async latch)**
+
+| Trigger | What runs |
+|---|---|
+| Date picker `valueChange` | `setFocalDay(pickedDate)` |
+| Slide ± buttons | Java-side `d ± 1` → `setFocalDay(next)` before `gotoDate(next)` |
+| Today button | `setFocalDay(LocalDate.now())` |
+| Page ± buttons | arm an `armFocalCapture` latch; the next `datesRendered` reads `getCurrentIntervalStart()` and sets focal |
+
+The latch keeps the unreliable, race-prone read-after-`next()` out
+of the user-gesture handlers — Java side gets a stale value until
+the JS round-trip completes, so a Listener-based capture is the
+only sound path. All other gestures compute the new date in pure
+Java and call `setFocalDay` synchronously.
+
+**View switch**
+
+`applyViewMode` always finishes with:
+
+```java
+calendar.changeView(...);
+if (focalDay != null) calendar.gotoDate(focalDay);
+```
+
+The follow-up `gotoDate` re-anchors the new view's visible window
+on the user's focal day; the resulting `datesRendered` does **not**
+overwrite `focalDay` because the latch is only set by Page ±.
+
+**Initial mount**
+
+If the persisted focal day differs from today, the constructor
+issues one `calendar.gotoDate(focalDay)` after the calendar mount
+so a returning user lands where they left off.
+
+### Acceptance signals
+
+- ✅ Picking 2026-09-15 in Week view and switching to Month →
+  September 2026 shows, not today's month.
+- ✅ Sliding back one day, then to N-days view → the slid-to day
+  stays in the visible window.
+- ✅ Clicking Today → focal flips to today and survives subsequent
+  view switches.
+- ✅ Page-Forward in Week view → the next week's Monday becomes the
+  focal day, captured via the `datesRendered` latch.
+- ✅ Page reload (F5) → focal day restored from the session,
+  calendar opens on it.
+- ✅ Switching views back and forth never causes `focalDay` to
+  drift onto the current interval-start (idempotent `gotoDate`).
+
+### Risks / open questions
+
+- **Month-view day clicks.** Clicking a day in Month-view does not
+  currently update `focalDay` — Month-view has no day-click
+  listener wired. A v2 could add one; left out of v1 because the
+  original ask was about *view-switch retention*, not click-as-
+  navigation.
+- **Page-back latch + custom views.** The arming latch relies on
+  `getCurrentIntervalStart()` being set after FullCalendar's
+  paging completes; verified for Day/Week/Month/N-days, but a
+  future custom view would need to surface a sensible interval-
+  start for the same latch to work.
+- **N-days centring.** With N=7 and focal=Thursday, FullCalendar
+  places Thursday in column 1 (not centred). v1 keeps the default
+  for predictability; centring (`focalDay.minusDays(n/2)`) is a
+  v2 candidate if users ask for it.
+
+---
+
+## #8 — Connection Manager UX refactor (Apple-Calendar-style)
+
+**Status:** ✅ shipped 2026-06-22 / 2026-06-23 across five layers in
+`1227e11`, `cab3cb1`, `d7ab55f`, `adab869`, `0a17133`, `c9b85b5`
+**Filed:** 2026-06-22
+
+### Idea
+
+A single Apple-Calendar-style Connection Manager replaces the three
+legacy dialogs (Settings, Connections, Subscriptions) with one
+Master-Detail dialog: server tabs on the left, the selected server's
+subscription list on the right. Adding a new server happens through
+a three-step wizard; toggling calendar visibility happens via a
+toolbar dropdown that never requires opening a dialog.
+
+### Motivation
+
+The bug-tracker had three separate entries — connection-management
+UX is unintuitive (closed BUG #6), subscribe/unsubscribe is too
+cumbersome (closed BUG #8), notifications do not fit the multi-
+server world (closed BUG #9) — that on closer reading were all the
+same user story: "make connecting, subscribing and seeing what is
+going on across multiple servers feel like one coherent flow." The
+three dialogs each owned one fragment of the story; new users hit
+the wrong one first, and the legacy single-connection editor
+silently fought the multi-server state model (the source of the
+previously-fixed closed BUG #4).
+
+A unified Connection Manager + Wizard + Quick-Toggle dropdown
+collapses the click-paths and removes the overlapping mental
+models in one go.
+
+### Sketch
+
+**Layer 1 — Quick-Toggle dropdown.** A toolbar button labelled
+`Visible (N/M)` opens a `Popover` containing a one-row-per-
+subscription toggle list plus bulk Show-all / Hide-all buttons.
+Same persistence path as the legacy Subscriptions dialog
+(`stateStore.writeSubscriptions` + `refreshAll`) so toggling from
+the dropdown stays in sync with everything else.
+
+**Layer 2 — three-step Connection Wizard.** A new
+`ConnectionWizardDialog` covers:
+
+1. *Provider + URL* — a `Quick connect` row of preset buttons
+   (Apple iCloud + future providers) pre-fills the collection URI
+   and swaps in a provider-specific hint for step 2.
+2. *Credentials* — username + password fields, a Test-Connection
+   button, and the provider hint (e.g. iCloud's app-specific-
+   password warning).
+3. *Calendars* — runs CalDAV discovery on step entry, displays the
+   results as a checkbox group with a **hybrid default-visibility
+   rule**: ≤ 5 calendars are pre-selected; > 5 are pre-deselected
+   and the bulk Select-all / Select-none buttons appear so a
+   30-calendar Nextcloud workspace does not flood the grid.
+
+The dialog itself is test-friendly: it accepts injected
+`discoveryFn`, `probeFn`, `onComplete` and `notify` callbacks so
+its UI logic stays independent of any specific `CalendarService`
+wiring.
+
+**Layer 3a — Apple-style Connection Manager.** The new
+`ConnectionManagerDialog` is a Master-Detail layout: vertical
+server `Tabs` on the left, the selected server's
+subscription list on the right. Each subscription row carries a
+colour dot, name, visibility checkbox, inline HTML5 colour picker
+and a remove-this-calendar button. The footer hosts
+"+ Add server" (opens the wizard), Close, plus per-server
+Re-discover (merges any newly-found calendars as
+`visible=false`) and Remove server (atomic — drops the server,
+all of its subscriptions and all of their per-URI colour
+fall-back entries from the BUG-#2 store, in one write).
+
+**Layer 3b — legacy cleanup.** With the new dialog covering every
+flow, the three legacy entry points are removed:
+`openSettingsDialog` (140 lines of inline dialog),
+`openConnectionsDialog`, `openSubscriptionsDialog`, plus the
+`ConnectionsDialog` and `SubscriptionsDialog` classes themselves.
+The toolbar shrinks from six buttons to three (Connection Manager
+/ Refresh / New event) plus the Visibility dropdown and tag filter.
+
+**Layer 4 — status-aware multi-server notifications.** Two
+helpers — `multiServerSummary()` produces `3 servers, 7 calendars,
+5 visible`, `serverScopeHint(serverId)` produces a bracketed
+`[iCloud]` subject suffix — feed every previously-misleading
+notification template:
+
+- Refresh-button toast: `Refreshed — 3 servers, 7 calendars, 5 visible`
+- Connect-success toast: `Connected to <serverName> — 3 servers, 7 calendars, 5 visible`
+- Remove-server toast: `Removed server "<serverName>" — 2 servers, 4 calendars, 3 visible`
+- Subscription-remove toast: `Disconnected from "<calendarName>" [iCloud]`
+- Re-discover toast / error: same scope suffix appended
+
+The pre-refactor templates referred only to the primary collection
+URI — actively misleading once three different backends were
+involved in the same refresh.
+
+**Layer 5 — one-shot legacy auto-migration.** A pre-refactor
+session that held only the legacy
+`calendar.connection.config` single-server key now silently
+migrates on mount: the constructor converts that one
+`CalDavConnectionConfig` into one `CalDavServerConnection` plus
+one matching `CalendarSubscription`, then rebuilds the service.
+The legacy key is deliberately **not deleted** — a rolled-back
+deploy can still read it; a future major release removes it once
+telemetry confirms zero readers.
+
+### Acceptance signals
+
+- ✅ Toolbar carries only `Connection Manager`, `Refresh`,
+  `New event` plus the Visibility dropdown + tag filter. No
+  Settings / Connections / Subscriptions buttons remain.
+- ✅ Connection Manager shows one tab per configured server;
+  selecting a tab lists that server's calendars on the right with
+  inline colour picker and visibility checkbox.
+- ✅ "+ Add server" opens the three-step wizard; the iCloud preset
+  pre-fills `https://caldav.icloud.com/` and switches the credentials-
+  step hint to the app-specific-password warning.
+- ✅ Hybrid default visibility: a server returning ≤ 5 calendars
+  pre-selects all; > 5 pre-selects none and shows the bulk
+  buttons.
+- ✅ Remove server is atomic — the server entry, its subscriptions
+  and their colour fall-back entries vanish in one write; the
+  refresh fires once.
+- ✅ Refresh toast carries the multi-server summary line; the
+  per-subscription disconnect toast carries the bracketed server
+  scope suffix.
+- ✅ A pre-refactor session with only the legacy connection key
+  set lands directly inside the Connection Manager with the
+  migrated server + subscription pre-populated. The legacy key
+  stays readable for rollback safety.
+
+### Risks / open questions
+
+- **Re-discover trigger is manual.** A periodic auto-pull is
+  deferred to a follow-up — manual avoids the trickier "when is
+  it safe to retry a server that just timed out?" question and
+  matches the rest of the toolbar's explicit-refresh model.
+- **Per-server streaming progress** (entries arriving as each
+  server finishes, not all at once) is deferred. The smart-delay
+  ProgressBar (Feature #9) covers the wall-clock UX; per-server
+  arrival ordering would need a custom EntryProvider on top of
+  the FullCalendar add-on.
+- **Notification spam at 5+ servers.** The summary line scales
+  fine, but every individual `connect/disconnect/refresh` still
+  fires its own toast; if telemetry shows a busy user feeling
+  flooded, a smart-delay/collapse pattern (similar to the
+  ProgressBar's 500 ms window) is the next step.
+- **i18n volume.** The wizard + manager + status-aware
+  notifications added ~30 EN+DE keys. Future provider presets
+  (Google / mailbox.org) inflate this further; a per-provider
+  bundle file under `vaadin-i18n/providers/` may eventually beat
+  one flat translations file.
+
+---
+
+## #9 — Parallel multi-server fan-out with smart-delay progress bar
+
+**Status:** ✅ shipped 2026-06-23 across two stages in `b4d4cd6`
+(parallel fan-out) and `cecb967` (progress bar)
+**Filed:** 2026-06-22
+
+### Idea
+
+`CalendarService.findInRange` queries every configured CalDAV
+client in **parallel** instead of one after the other. A small
+indeterminate progress bar in the toolbar surfaces only when a
+refresh actually takes longer than a 500 ms smart-delay window;
+fast refreshes never flash it.
+
+### Motivation
+
+Closed BUG #10 reported the symptom: five servers each taking
+~800 ms REPORT meant ~4 s until the first entry appeared, and one
+hanging server blocked every other. The sequential `for` loop
+inside `fanOut` was the bottleneck — the wall-clock added up
+rather than collapsing to the slowest single client. Once two or
+more CalDAV backends were attached (the explicit goal of the
+Connection Manager refactor), the latency became actively painful
+for the user.
+
+A parallel fan-out drops wall-clock from `sum(client_i)` to
+`max(client_i)` and isolates per-client failures from the
+overall round-trip. A small indeterminate progress bar gives a
+visual hint that work is in flight while still being unobtrusive
+on the fast path.
+
+### Sketch
+
+**Stage A — parallel fan-out.**
+`CalendarService.fanOut` now spawns one
+`CompletableFuture.supplyAsync(...)` per `CalDavClient` against
+`ForkJoinPool.commonPool()`. Each per-client task builds a private
+`ArrayList<Entry>` and applies the calendar's palette colour;
+the colour lookup is pre-snapshotted into a `HashMap` before any
+worker starts so the workers never touch shared mutable state.
+After `allOf(futures).join()` returns, a single-threaded loop
+flattens the per-client lists into the `Stream.Builder` the
+existing API contract expects.
+
+Failure semantics match the pre-refactor contract: if any client
+throws, the wrapping `CompletionException` is unwrapped and the
+underlying `RuntimeException` propagates, exactly as before.
+Graceful per-client partial-failure surfacing is left to a
+follow-up (it would change observable error behaviour and break
+the test contracts).
+
+**Stage B — smart-delay progress bar.**
+`ChronoGrid` carries a hidden indeterminate `ProgressBar` in the
+status row plus a per-UI `ScheduledExecutorService` (single
+daemon thread, lazy-init on `attach`, `shutdownNow` on `detach`).
+
+```
+PROGRESS_SMART_DELAY_MS = 500
+```
+
+On every user-triggered refresh:
+
+1. `scheduleProgressShow()` cancels any pending earlier
+   schedule, then schedules a `UI.access` call to set the bar
+   visible after the smart-delay window.
+2. `refreshAll()` triggers the fetch.
+3. The existing `addDatesRenderedListener` calls
+   `hideProgressBar()` after rendering completes; that cancels
+   the pending show and sets the bar invisible — idempotent, so
+   it is safe to call on any rendering event regardless of
+   whether a refresh was in flight.
+
+A refresh that completes inside 500 ms never lets the scheduled
+show fire — the cancellation arrives first — so the bar visually
+never appears. A refresh that takes longer surfaces the bar; the
+hide event drops it as soon as data lands. The Vaadin
+`UIDetachedException` thrown when the UI is gone before the
+schedule fires is silently swallowed.
+
+### Acceptance signals
+
+- ✅ Wall-clock for a multi-server `findInRange` is approximately
+  the slowest single client, not the sum (verified via the
+  existing fixture-backed multi-client integration tests still
+  passing under the parallel implementation).
+- ✅ A hanging server no longer freezes the entire fetch — its
+  future blocks the join, but the others can complete; failure
+  semantics still propagate the offending exception (see
+  follow-ups below).
+- ✅ Toolbar carries the indeterminate `ProgressBar` with
+  id `calendar-toolbar-progress`, initial visibility `false`,
+  `PROGRESS_SMART_DELAY_MS = 500` pinned.
+- ✅ Fast refresh (local testbench, < 500 ms) never flashes the
+  bar — the cancellation outruns the show.
+- ✅ Slow refresh (multi-server cold cache) shows the bar; the
+  `datesRendered` event hides it cleanly.
+- ✅ Logout / route-switch shuts down the per-UI scheduler;
+  no thread leak across sessions.
+
+### Risks / open questions
+
+- **Partial-failure isolation.** "Any client throws → fan-out
+  throws" is preserved as the contract today. A future iteration
+  could collect per-client `Result<Stream<Entry>, CalDavError>`
+  and surface failed clients via Feature #8's status-aware
+  notifications instead of aborting the entire refresh — but that
+  changes observable behaviour and needs an explicit design pass.
+- **No per-server streaming arrival.** Entries from all clients
+  surface together once `allOf` completes; a future EntryProvider
+  rewrite could push per-client results into the grid as each
+  future resolves. The Vaadin Stefan FullCalendar add-on's
+  EntryProvider API would need verification first.
+- **Executor choice.** `ForkJoinPool.commonPool()` is the JVM
+  default and right for short bursts of HTTP I/O. A dedicated
+  `Executors.newFixedThreadPool(8)` field plus
+  session-destroy-listener shutdown was considered and deferred —
+  if telemetry shows the common pool contended by long-running
+  fetches, switching to a dedicated pool is a one-field-and-
+  shutdown-hook change.
+- **Smart-delay tuning.** 500 ms is the convention from BUG #10's
+  analysis. If user feedback says fast servers still flash the
+  bar (race against scheduled task), increase to 750 ms; if slow
+  servers feel like the bar appears too late, decrease to 300 ms.
+- **Progress granularity.** v1 is indeterminate. A
+  determinate-counter ("server 2 of 5 loaded") would need the
+  parallel fan-out to notify per-completion — straightforward but
+  re-uses the per-server streaming arrival hook above. Deferred
+  until that lands.
